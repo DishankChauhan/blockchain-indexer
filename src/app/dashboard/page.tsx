@@ -1,9 +1,9 @@
-'use client';
+'use client'
 
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { DatabaseConnectionForm } from '@/components/DatabaseConnectionForm';
-import { IndexingConfigForm } from '@/components/IndexingConfigForm';
+import IndexingConfigForm from '@/components/IndexingConfigForm';
 import { DatabaseConnection, IndexingJob } from '@/types';
 
 export default function DashboardPage() {
