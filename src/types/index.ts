@@ -23,6 +23,7 @@ export interface DatabaseConnection {
 }
 
 export interface IndexingJob {
+  metadata: {};
   id: string;
   userId: string;
   dbConnectionId: string;
@@ -88,4 +89,12 @@ export interface Notification {
   status: 'read' | 'unread';
   createdAt: Date;
   updatedAt: Date;
+} 
+
+export interface DatabaseCredentials {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
 } 

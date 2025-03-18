@@ -19,15 +19,14 @@ export async function GET() {
       return new NextResponse('User not found', { status: 404 });
     }
 
-    const notifications = await prisma.notification.findMany({
+    const connections = await prisma.databaseConnection.findMany({
       where: { userId: user.id },
-      orderBy: { createdAt: 'desc' },
-      take: 10 // Limit to 10 most recent notifications
+      orderBy: { createdAt: 'desc' }
     });
 
-    return NextResponse.json(notifications);
+    return NextResponse.json(connections);
   } catch (error) {
-    console.error('Notifications API Error:', error);
+    console.error('Connections API Error:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

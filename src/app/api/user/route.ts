@@ -12,22 +12,23 @@ export async function GET() {
     }
 
     const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
+      where: { email: session.user.email },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true
+      }
     });
 
     if (!user) {
       return new NextResponse('User not found', { status: 404 });
     }
 
-    const notifications = await prisma.notification.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: 'desc' },
-      take: 10 // Limit to 10 most recent notifications
-    });
-
-    return NextResponse.json(notifications);
+    return NextResponse.json(user);
   } catch (error) {
-    console.error('Notifications API Error:', error);
+    console.error('User API Error:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

@@ -3,8 +3,7 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiClient } from '@/lib/api/apiClient';
-import { AppError } from '@/lib/utils/errorHandling';
-import { captureException } from '@sentry/nextjs';
+import { AppError, handleError } from '@/lib/utils/errorHandling';
 
 // Types
 type User = {
@@ -29,6 +28,17 @@ type DashboardData = {
   user: User;
   notifications: Notification[];
   connections: DatabaseConnection[];
+};
+
+// Analytics tracking (replace with your analytics service)
+const trackPageView = () => {
+  // Implementation depends on your analytics service
+  // Example: mixpanel.track('Dashboard View')
+};
+
+const trackError = (error: Error) => {
+  // Implementation depends on your analytics service
+  // Example: mixpanel.track('Dashboard Error', { message: error.message })
 };
 
 // Components
@@ -128,12 +138,15 @@ const useDashboardData = () => {
       ]);
 
       setData({ user: userData, notifications, connections });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load dashboard data';
-      setError(message);
+    } catch (error) {
+      const errorMessage = handleError(error, {
+        component: 'Dashboard',
+        action: 'fetchData'
+      });
+      setError(errorMessage);
       
-      if (err instanceof AppError && !err.isOperational) {
-        captureException(err);
+      if (error instanceof Error) {
+        trackError(error);
       }
     } finally {
       setLoading(false);
@@ -141,6 +154,7 @@ const useDashboardData = () => {
   }, [apiClient, router]);
 
   React.useEffect(() => {
+    trackPageView();
     fetchData();
   }, [fetchData]);
 

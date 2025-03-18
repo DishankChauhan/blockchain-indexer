@@ -8,37 +8,36 @@ generator client {
 }
 
 model User {
-  id                 String               @id @default(cuid())
-  email              String              @unique
-  name               String?
-  notifications      Notification[]
-  accounts           Account[]
-  sessions           Session[]
-  dbConnections      DatabaseConnection[]
-  indexingJobs       IndexingJob[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-
-  @@index([email])
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  notifications Notification[]
+  dbConnections DatabaseConnection[]
+  indexingJobs  IndexingJob[]
 }
 
 model Account {
-  id                String   @id @default(cuid())
+  id                String  @id @default(cuid())
   userId            String
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String?  @db.Text
-  access_token      String?  @db.Text
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String?  @db.Text
+  id_token          String? @db.Text
   session_state     String?
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
-  @@index([userId])
 }
 
 model Session {
@@ -47,74 +46,53 @@ model Session {
   userId       String
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
 }
 
 model DatabaseConnection {
-  id            String        @id @default(cuid())
-  userId        String
-  host          String
-  port          Int
-  database      String
-  username      String
-  password      String
-  status        String       @default("pending")
+  id              String    @id @default(cuid())
+  userId          String
+  host            String
+  port            Int
+  database        String
+  username        String
+  password        String
+  status          String
   lastConnectedAt DateTime?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  indexingJobs  IndexingJob[]
-
-  @@index([userId])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model IndexingJob {
-  id               String            @id @default(cuid())
-  userId           String
-  dbConnectionId   String
-  status           String           @default("pending")
-  type             String
-  config           Json
-  lastRunAt        DateTime?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
-  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  dbConnection     DatabaseConnection @relation(fields: [dbConnectionId], references: [id], onDelete: Cascade)
-  webhooks         Webhook[]
-
-  @@index([userId])
-  @@index([dbConnectionId])
-}
-
-model Notification {
-  id             String   @id @default(cuid())
-  message        String
-  type           String
-  userId         String?
-  priority       String   @default("medium")
-  status         String   @default("pending")
-  metadata       Json?    @default("{}")
-  deliveryResults Json?   @default("{}")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  user           User?    @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@index([type])
-  @@index([status])
-  @@index([createdAt])
+  id          String    @id @default(cuid())
+  userId      String
+  status      String
+  type        String
+  config      Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  webhooks    Webhook[]
 }
 
 model Webhook {
-  id              String      @id @default(cuid())
-  heliusWebhookId String      @unique
-  indexingJobId   String
-  secret          String
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  indexingJob     IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
+  id             String      @id @default(cuid())
+  heliusWebhookId String
+  indexingJobId  String
+  secret         String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  indexingJob    IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
+}
 
-  @@index([indexingJobId])
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  message   String
+  type      String
+  status    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 } 

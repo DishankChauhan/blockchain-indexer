@@ -1,99 +1,35 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
-import { AppError, ErrorCodes } from '../utils/errorHandling';
-import axiosRetry from 'axios-retry';
+import { AppError } from '@/lib/utils/errorHandling';
+
+type RetryConfig = {
+  maxRetries: number;
+  baseDelay: number;
+  maxDelay: number;
+};
+
+type RateLimitConfig = {
+  maxRequests: number;
+  windowMs: number;
+};
 
 export class ApiClient {
   private static instance: ApiClient;
-  private client: AxiosInstance;
-  private retryCount: number = 3;
-  private retryDelay: number = 1000;
+  private baseUrl: string;
+  private retryConfig: RetryConfig;
+  private rateLimitConfig: RateLimitConfig;
+  private requestCounts: Map<string, { count: number; resetTime: number }>;
 
   private constructor() {
-    this.client = axios.create({
-      baseURL: process.env.NEXT_PUBLIC_API_BASE_URL,
-      timeout: 10000,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    // Configure retry behavior
-    axiosRetry(this.client, {
-      retries: this.retryCount,
-      retryDelay: (retryCount) => {
-        return this.retryDelay * Math.pow(2, retryCount - 1);
-      },
-      retryCondition: (error: AxiosError) => {
-        return axiosRetry.isNetworkOrIdempotentRequestError(error) ||
-          error.response?.status === 429;
-      },
-    });
-
-    // Add request interceptor
-    this.client.interceptors.request.use(
-      (config) => {
-        // Add auth token if available
-        const token = localStorage.getItem('authToken');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-      },
-      (error) => Promise.reject(error)
-    );
-
-    // Add response interceptor
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error: AxiosError) => {
-        if (!error.response) {
-          throw new AppError(
-            'Network error occurred',
-            ErrorCodes.NETWORK_ERROR,
-            0,
-            true
-          );
-        }
-
-        switch (error.response.status) {
-          case 401:
-            throw new AppError(
-              'Unauthorized access',
-              ErrorCodes.UNAUTHORIZED,
-              401,
-              true
-            );
-          case 403:
-            throw new AppError(
-              'Access forbidden',
-              ErrorCodes.FORBIDDEN,
-              403,
-              true
-            );
-          case 404:
-            throw new AppError(
-              'Resource not found',
-              ErrorCodes.NOT_FOUND,
-              404,
-              true
-            );
-          case 422:
-            throw new AppError(
-              (error.response.data as { message?: string })?.message || 'Validation error',
-              ErrorCodes.VALIDATION_ERROR,
-              422,
-              true
-            );
-          default:
-            throw new AppError(
-              'An unexpected error occurred',
-              ErrorCodes.INTERNAL_SERVER_ERROR,
-              error.response.status,
-              false
-            );
-        }
-      }
-    );
+    this.baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+    this.retryConfig = {
+      maxRetries: 3,
+      baseDelay: 1000,
+      maxDelay: 5000,
+    };
+    this.rateLimitConfig = {
+      maxRequests: 50,
+      windowMs: 60000, // 1 minute
+    };
+    this.requestCounts = new Map();
   }
 
   public static getInstance(): ApiClient {
@@ -103,57 +39,100 @@ export class ApiClient {
     return ApiClient.instance;
   }
 
-  public async get<T>(url: string, config = {}): Promise<T> {
-    try {
-      const response = await this.client.get<T>(url, config);
-      return response.data;
-    } catch (error) {
-      throw this.handleApiError(error);
+  private checkRateLimit(endpoint: string): void {
+    const now = Date.now();
+    const requestInfo = this.requestCounts.get(endpoint);
+
+    if (requestInfo) {
+      if (now > requestInfo.resetTime) {
+        // Reset counter if window has passed
+        this.requestCounts.set(endpoint, {
+          count: 1,
+          resetTime: now + this.rateLimitConfig.windowMs,
+        });
+      } else if (requestInfo.count >= this.rateLimitConfig.maxRequests) {
+        throw new AppError(
+          'Rate limit exceeded'
+        );
+      } else {
+        // Increment counter
+        requestInfo.count++;
+      }
+    } else {
+      // First request for this endpoint
+      this.requestCounts.set(endpoint, {
+        count: 1,
+        resetTime: now + this.rateLimitConfig.windowMs,
+      });
     }
   }
 
-  public async post<T>(url: string, data = {}, config = {}): Promise<T> {
+  private async retryWithBackoff<T>(
+    operation: () => Promise<T>,
+    endpoint: string,
+    retryCount = 0
+  ): Promise<T> {
     try {
-      const response = await this.client.post<T>(url, data, config);
-      return response.data;
+      this.checkRateLimit(endpoint);
+      return await operation();
     } catch (error) {
-      throw this.handleApiError(error);
-    }
-  }
-
-  public async put<T>(url: string, data = {}, config = {}): Promise<T> {
-    try {
-      const response = await this.client.put<T>(url, data, config);
-      return response.data;
-    } catch (error) {
-      throw this.handleApiError(error);
-    }
-  }
-
-  public async delete<T>(url: string, config = {}): Promise<T> {
-    try {
-      const response = await this.client.delete<T>(url, config);
-      return response.data;
-    } catch (error) {
-      throw this.handleApiError(error);
-    }
-  }
-
-  private handleApiError(error: unknown): never {
-    if (error instanceof AppError) {
+      if (
+        error instanceof AppError &&
+        !error.isOperational &&
+        retryCount < this.retryConfig.maxRetries
+      ) {
+        const delay = Math.min(
+          this.retryConfig.baseDelay * Math.pow(2, retryCount),
+          this.retryConfig.maxDelay
+        );
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.retryWithBackoff(operation, endpoint, retryCount + 1);
+      }
       throw error;
     }
-    
-    if (axios.isAxiosError(error)) {
-      // This error was already handled by the interceptor
-      throw error;
+  }
+
+  private async handleResponse<T>(response: Response): Promise<T> {
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'An error occurred' }));
+      throw new AppError(
+        error.message || 'API request failed',
+        true
+      );
     }
-    
-    throw new AppError(
-      'An unexpected error occurred',
-      ErrorCodes.INTERNAL_SERVER_ERROR,
-      500,
-      false
+    return response.json();
+  }
+
+  public async get<T>(endpoint: string): Promise<T> {
+    return this.retryWithBackoff(
+      async () => {
+        const response = await fetch(`${this.baseUrl}${endpoint}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+        return this.handleResponse<T>(response);
+      },
+      endpoint
+    );
+  }
+
+  public async post<T>(endpoint: string, data: unknown): Promise<T> {
+    return this.retryWithBackoff(
+      async () => {
+        const response = await fetch(`${this.baseUrl}${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify(data),
+        });
+        return this.handleResponse<T>(response);
+      },
+      endpoint
     );
   }
 } 

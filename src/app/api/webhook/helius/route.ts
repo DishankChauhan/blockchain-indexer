@@ -1,61 +1,47 @@
 import { NextResponse } from 'next/server';
-import { verifyWebhookSignature } from '@/lib/webhookUtils';
-import { processTransactions } from '@/lib/processors/transactionProcessor';
-import { handleError, IndexingError } from '@/lib/utils/errorHandler';
-import prisma from '@/lib/prisma';
+import { HeliusService } from '@/lib/services/heliusService';
+import { AppError } from '@/lib/utils/errorHandling';
 
-export async function POST(request: Request) {
+const WEBHOOK_SECRET = process.env.HELIUS_WEBHOOK_SECRET;
+
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    const signature = request.headers.get('x-signature');
-    
-    if (!signature) {
-      throw new IndexingError(
-        'Missing webhook signature',
-        'WEBHOOK_VERIFICATION_FAILED',
-        { headers: Object.fromEntries(request.headers) }
-      );
-    }
-    // Get webhook configuration from database
-   // ... existing code ...
-   const webhook = await prisma.webhook.findFirst({
-    where: { heliusWebhookId: body.webhookId }
-  });
-// ... existing code ...
-
-    if (!webhook) {
-      throw new IndexingError(
-        'Invalid webhook ID',
-        'WEBHOOK_VERIFICATION_FAILED',
-        { webhookId: body.webhookId }
-      );
-    }
-
     // Verify webhook signature
-    const isValid = await verifyWebhookSignature(
-      JSON.stringify(body),
-      signature,
-      webhook.secret
-    );
-
-    if (!isValid) {
-      throw new IndexingError(
-        'Invalid webhook signature',
-        'WEBHOOK_VERIFICATION_FAILED',
-        { signature }
+    const signature = req.headers.get('x-signature');
+    if (!signature || signature !== WEBHOOK_SECRET) {
+      return NextResponse.json(
+        { error: 'Invalid signature' },
+        { status: 401 }
       );
     }
 
-    // Process transactions
-    await processTransactions(body.transactions, webhook.indexingJobId);
+    const body = await req.json();
+    const { jobId, userId, data } = body;
+
+    if (!jobId || !userId || !Array.isArray(data)) {
+      return NextResponse.json(
+        { error: 'Invalid webhook payload' },
+        { status: 400 }
+      );
+    }
+
+    const heliusService = HeliusService.getInstance();
+    await heliusService.handleWebhookData(jobId, userId, data);
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const errorResponse = await handleError(error as Error, undefined, {
-      endpoint: 'webhook/helius',
-      method: 'POST'
-    });
+    console.error('Webhook processing error:', error);
 
-    return NextResponse.json(errorResponse, { status: 500 });
+    if (error instanceof AppError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.statusCode }
+      );
+    }
+
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 } 
