@@ -1,5 +1,14 @@
 import { sendNotification } from '../services/notificationService';
-import { ErrorResponse } from '@/types';
+import { NotificationType } from '@/types/notification';
+
+export interface ErrorResponse {
+  error: {
+    id: string;
+    type: string;
+    message: string;
+    timestamp: string;
+  };
+}
 
 export class IndexingError extends Error {
   constructor(
@@ -37,7 +46,7 @@ export async function handleError(
   if (severity === 'high') {
     await sendNotification(
       `Critical error: ${error.message}`,
-      'error',
+      NotificationType.ERROR,
       {
         userId,
         channel: ['email', 'webhook', 'database'],
@@ -52,7 +61,7 @@ export async function handleError(
   } else if (severity === 'medium') {
     await sendNotification(
       `Error occurred: ${error.message}`,
-      'error',
+      NotificationType.WARNING,
       {
         userId,
         channel: ['database'],

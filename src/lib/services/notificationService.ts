@@ -1,217 +1,163 @@
-import prisma from '@/lib/prisma';
-import sgMail from '@sendgrid/mail';
-import { handleError, IndexingError } from '@/lib/utils/errorHandler';
+import { 
+  NotificationType, 
+  NotificationOptions, 
+  NotificationResponse 
+} from '@/types/notification';
 
-if (process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [1000, 5000, 15000]; // Exponential backoff in milliseconds
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS = 100; // Maximum requests per minute
+
+class NotificationError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly retryable: boolean = true,
+    public readonly retryAfter?: number
+  ) {
+    super(message);
+    this.name = 'NotificationError';
+  }
 }
 
-export type NotificationType = 'error' | 'warning' | 'info' | 'success';
-export type NotificationChannel = 'email' | 'webhook' | 'database';
+// In-memory rate limiting (consider using Redis in a distributed system)
+const rateLimitStore = new Map<string, { count: number; timestamp: number }>();
 
-interface NotificationOptions {
-  userId?: string;
-  channel?: NotificationChannel[];
-  priority?: 'low' | 'medium' | 'high';
-  metadata?: Record<string, any>;
+function checkRateLimit(userId?: string): void {
+  const key = userId || 'anonymous';
+  const now = Date.now();
+  const limit = rateLimitStore.get(key);
+
+  if (limit) {
+    if (now - limit.timestamp > RATE_LIMIT_WINDOW) {
+      // Reset if window has passed
+      rateLimitStore.set(key, { count: 1, timestamp: now });
+    } else if (limit.count >= MAX_REQUESTS) {
+      const retryAfter = Math.ceil((RATE_LIMIT_WINDOW - (now - limit.timestamp)) / 1000);
+      throw new NotificationError(
+        'Rate limit exceeded',
+        'RATE_LIMIT_EXCEEDED',
+        true,
+        retryAfter
+      );
+    } else {
+      // Increment count
+      rateLimitStore.set(key, { count: limit.count + 1, timestamp: limit.timestamp });
+    }
+  } else {
+    // First request
+    rateLimitStore.set(key, { count: 1, timestamp: now });
+  }
 }
 
-const EMAIL_TEMPLATES = {
-  error: {
-    subject: 'Error Alert - Blockchain Indexer',
-    color: '#DC2626',
-  },
-  warning: {
-    subject: 'Warning Notice - Blockchain Indexer',
-    color: '#F59E0B',
-  },
-  info: {
-    subject: 'Information Update - Blockchain Indexer',
-    color: '#3B82F6',
-  },
-  success: {
-    subject: 'Success Notification - Blockchain Indexer',
-    color: '#10B981',
-  },
-};
+async function sendNotificationWithRetry(
+  message: string,
+  type: NotificationType,
+  options: NotificationOptions,
+  retryCount = 0
+): Promise<NotificationResponse> {
+  try {
+    checkRateLimit(options.userId);
+
+    const response = await fetch('/api/notifications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        type,
+        options: { ...options, retryCount },
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new NotificationError(
+        error.message || 'Failed to send notification',
+        error.code || 'NOTIFICATION_FAILED',
+        error.retryable !== false,
+        error.retryAfter
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof NotificationError) {
+      if (error.retryable && retryCount < MAX_RETRIES) {
+        // Wait for the specified delay or use exponential backoff
+        const delay = error.retryAfter 
+          ? error.retryAfter * 1000 
+          : RETRY_DELAYS[retryCount];
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return sendNotificationWithRetry(message, type, options, retryCount + 1);
+      }
+      throw error;
+    }
+
+    // Handle unexpected errors
+    console.error('Unexpected notification error:', error);
+    throw new NotificationError(
+      'An unexpected error occurred',
+      'UNEXPECTED_ERROR',
+      false
+    );
+  }
+}
 
 export async function sendNotification(
   message: string,
   type: NotificationType,
   options: NotificationOptions = {}
-) {
-  const { userId, channel = ['database'], priority = 'medium', metadata } = options;
-
+): Promise<NotificationResponse> {
   try {
-    // Store notification in database
-    const notification = await prisma.notification.create({
-      data: {
-        message,
-        type,
-        priority,
-        userId,
-        channel,
-        metadata,
-        status: 'unread',
-      },
-    });
-
-    // Send email notifications if configured
-    if (channel.includes('email') && process.env.SENDGRID_API_KEY) {
-      await sendEmailNotification(message, type, userId);
-    }
-
-    // Send webhook notifications if configured
-    if (channel.includes('webhook') && userId) {
-      await sendWebhookNotification(message, type, userId);
-    }
-
-    return notification;
-  } catch (error) {
-    throw new IndexingError(
-      'Failed to send notification',
-      'NOTIFICATION_FAILED',
-      { message, type, options, error }
-    );
-  }
-}
-
-async function sendEmailNotification(
-  message: string,
-  type: NotificationType,
-  userId?: string
-) {
-  if (!userId || !process.env.SENDGRID_API_KEY) return;
-
-  try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, name: true },
-    });
-
-    if (!user?.email) {
-      throw new IndexingError(
-        'User email not found',
-        'EMAIL_NOT_FOUND',
-        { userId }
+    // Validate inputs
+    if (!message?.trim()) {
+      throw new NotificationError(
+        'Message is required',
+        'INVALID_INPUT',
+        false
       );
     }
 
-    const template = EMAIL_TEMPLATES[type];
-    const html = generateEmailTemplate(message, type, user.name);
+    if (!Object.values(NotificationType).includes(type)) {
+      throw new NotificationError(
+        'Invalid notification type',
+        'INVALID_INPUT',
+        false
+      );
+    }
 
-    const msg = {
-      to: user.email,
-      from: process.env.EMAIL_FROM || 'noreply@blockchainindexer.com',
-      subject: template.subject,
-      html,
+    // Set default options
+    const defaultOptions: NotificationOptions = {
+      channel: ['database'],
+      priority: 'medium',
+      ...options,
     };
 
-    await sgMail.send(msg);
+    // Send notification with retry logic
+    return await sendNotificationWithRetry(message, type, defaultOptions);
   } catch (error) {
-    throw new IndexingError(
-      'Failed to send email notification',
-      'EMAIL_SEND_FAILED',
-      { userId, message, type, error }
-    );
-  }
-}
-
-async function sendWebhookNotification(
-  message: string,
-  type: NotificationType,
-  userId: string
-) {
-  try {
-    const webhookEndpoints = await prisma.notificationWebhook.findMany({
-      where: {
-        userId,
-        enabled: true,
-      },
+    // Log error for monitoring
+    console.error('Notification service error:', {
+      error,
+      message,
+      type,
+      options,
     });
 
-    const failedEndpoints: string[] = [];
-    const timestamp = new Date().toISOString();
-
-    await Promise.all(
-      webhookEndpoints.map(async (endpoint) => {
-        try {
-          const response = await fetch(endpoint.url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Webhook-Secret': endpoint.secret,
-              'X-Timestamp': timestamp,
-            },
-            body: JSON.stringify({
-              message,
-              type,
-              timestamp,
-              metadata: {
-                webhookId: endpoint.id,
-                userId,
-              },
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-        } catch (error) {
-          failedEndpoints.push(endpoint.url);
-          // Log the error but don't throw to allow other webhooks to process
-          await handleError(error as Error, userId, {
-            component: 'webhookNotification',
-            endpoint: endpoint.url,
-          });
-        }
-      })
-    );
-
-    if (failedEndpoints.length > 0) {
-      throw new IndexingError(
-        'Some webhook notifications failed',
-        'WEBHOOK_PARTIAL_FAILURE',
-        { failedEndpoints }
-      );
+    // Rethrow NotificationError instances
+    if (error instanceof NotificationError) {
+      throw error;
     }
-  } catch (error) {
-    throw new IndexingError(
-      'Failed to send webhook notifications',
-      'WEBHOOK_SEND_FAILED',
-      { userId, message, type, error }
+
+    // Wrap unknown errors
+    throw new NotificationError(
+      'Failed to send notification',
+      'NOTIFICATION_FAILED',
+      false
     );
   }
-}
-
-function generateEmailTemplate(message: string, type: NotificationType, userName?: string): string {
-  const template = EMAIL_TEMPLATES[type];
-  return `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <style>
-          .container { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background-color: ${template.color}; color: white; padding: 20px; border-radius: 5px; }
-          .content { padding: 20px; background-color: #f9fafb; border-radius: 5px; margin-top: 20px; }
-          .footer { text-align: center; margin-top: 20px; color: #6b7280; font-size: 0.875rem; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>${template.subject}</h1>
-          </div>
-          <div class="content">
-            ${userName ? `<p>Hello ${userName},</p>` : ''}
-            <p>${message}</p>
-          </div>
-          <div class="footer">
-            <p>This is an automated message from Blockchain Indexer. Please do not reply to this email.</p>
-          </div>
-        </div>
-      </body>
-    </html>
-  `;
 } 
