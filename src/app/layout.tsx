@@ -1,11 +1,11 @@
-import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import './globals.css';
+import { Navigation } from '@/components/Navigation';
 import { Providers } from './providers';
+import './globals.css';
 
 const inter = Inter({ subsets: ['latin'] });
 
-export const metadata: Metadata = {
+export const metadata = {
   title: 'Blockchain Indexing Platform',
   description: 'Index blockchain data into your PostgreSQL database using Helius webhooks',
 };
@@ -18,7 +18,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <Providers>
+          <Navigation />
+          <main className="min-h-screen bg-gray-50">
+            {children}
+          </main>
+        </Providers>
       </body>
     </html>
   );
