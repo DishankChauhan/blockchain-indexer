@@ -16,9 +16,9 @@ const configSchema = z.object({
     governance: z.boolean(),
   }),
   filters: z.object({
-    programIds: z.array(z.string()).optional(),
-    accounts: z.array(z.string()).optional(),
-    startSlot: z.number().optional(),
+    programIds: z.string(),
+    accounts: z.string(),
+    startSlot: z.string().optional(),
     includeMints: z.boolean(),
     includeMetadata: z.boolean(),
   }),
@@ -29,7 +29,19 @@ const configSchema = z.object({
   }),
 });
 
-type IndexingConfig = z.infer<typeof configSchema>;
+type FormValues = z.infer<typeof configSchema>;
+
+type IndexingConfig = {
+  categories: FormValues['categories'];
+  filters: {
+    programIds: string[];
+    accounts: string[];
+    startSlot?: number;
+    includeMints: boolean;
+    includeMetadata: boolean;
+  };
+  webhook: FormValues['webhook'];
+};
 
 interface Props {
   onSubmit: (config: IndexingConfig) => Promise<void>;
@@ -44,7 +56,7 @@ export default function IndexingConfigForm({ onSubmit, isLoading }: Props) {
     handleSubmit,
     formState: { errors },
     watch,
-  } = useForm<IndexingConfig>({
+  } = useForm<FormValues>({
     resolver: zodResolver(configSchema),
     defaultValues: {
       categories: {
@@ -57,22 +69,34 @@ export default function IndexingConfigForm({ onSubmit, isLoading }: Props) {
         governance: false,
       },
       filters: {
-        programIds: [],
-        accounts: [],
+        programIds: '',
+        accounts: '',
+        startSlot: '',
         includeMints: true,
         includeMetadata: true,
       },
       webhook: {
         enabled: false,
+        url: '',
+        secret: '',
       },
     },
   });
 
   const watchWebhookEnabled = watch('webhook.enabled');
 
-  const handleFormSubmit = async (data: IndexingConfig) => {
+  const handleFormSubmit = async (data: FormValues) => {
     try {
-      await onSubmit(data);
+      const transformedData: IndexingConfig = {
+        ...data,
+        filters: {
+          ...data.filters,
+          programIds: data.filters.programIds.split(',').map(s => s.trim()).filter(Boolean),
+          accounts: data.filters.accounts.split(',').map(s => s.trim()).filter(Boolean),
+          startSlot: data.filters.startSlot ? parseInt(data.filters.startSlot, 10) : undefined,
+        }
+      };
+      await onSubmit(transformedData);
       toast.success('Indexing configuration saved successfully');
       setSelectedCategory(null);
     } catch (error) {

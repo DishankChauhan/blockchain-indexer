@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { IndexingCategory } from '@/types';
 
 export async function POST(req: Request) {
   try {
@@ -34,9 +33,11 @@ export async function POST(req: Request) {
     const indexingJob = await prisma.indexingJob.create({
       data: {
         userId: session.user.email as string,
-        dbConnectionId,
-        category,
-        config,
+        type: category,
+        config: {
+          ...config,
+          dbConnectionId
+        },
         status: 'pending',
       },
     });
@@ -49,7 +50,7 @@ export async function POST(req: Request) {
       job: {
         id: indexingJob.id,
         status: indexingJob.status,
-        category: indexingJob.category,
+        category: indexingJob.type,
       },
     });
   } catch (error) {

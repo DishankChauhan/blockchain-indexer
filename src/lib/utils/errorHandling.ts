@@ -1,8 +1,7 @@
 export class AppError extends Error {
   public readonly isOperational: boolean;
-  statusCode: number | undefined;
 
-  constructor(message: string, isOperational: boolean = true) {
+  constructor(message: string, isOperational = true) {
     super(message);
     this.name = 'AppError';
     this.isOperational = isOperational;
@@ -10,17 +9,15 @@ export class AppError extends Error {
   }
 }
 
-export const handleError = (error: unknown, p0: { component: string; action: string; }): string => {
+export function handleError({ component, action }: { component: string; action: string }, error: unknown): never {
+  console.error(`Error in ${component} during ${action}:`, error);
+  
   if (error instanceof AppError) {
-    if (!error.isOperational) {
-      console.error('Non-operational error:', error);
-    }
-    return error.message;
+    throw error;
   }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return 'An unexpected error occurred';
-}; 
+  
+  throw new AppError(
+    `Unexpected error in ${component} during ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    false
+  );
+} 

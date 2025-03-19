@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { JobService } from '@/lib/services/jobService';
+import JobService  from '@/lib/services/jobService';
 import { AppError } from '@/lib/utils/errorHandling';
 
 export async function GET(

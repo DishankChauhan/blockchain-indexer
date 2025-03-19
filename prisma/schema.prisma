@@ -56,23 +56,32 @@ model DatabaseConnection {
   database        String
   username        String
   password        String
-  status          String
+  status          String    @default("pending")
   lastConnectedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  indexingJobs    IndexingJob[]
+
+  @@index([userId])
 }
 
 model IndexingJob {
-  id          String    @id @default(cuid())
-  userId      String
-  status      String
-  type        String
-  config      Json
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  webhooks    Webhook[]
+  id              String    @id @default(cuid())
+  userId          String
+  dbConnectionId  String
+  type            String
+  config          Json
+  status          String    @default("pending")
+  lastRunAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection @relation(fields: [dbConnectionId], references: [id], onDelete: Cascade)
+  webhooks        Webhook[]
+
+  @@index([userId])
+  @@index([dbConnectionId])
 }
 
 model Webhook {
@@ -83,6 +92,8 @@ model Webhook {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
   indexingJob    IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
+
+  @@index([indexingJobId])
 }
 
 model Notification {
