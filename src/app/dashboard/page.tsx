@@ -246,11 +246,14 @@ const useDashboardData = () => {
       ]);
 
       setData({ user: userData, notifications, connections, jobs });
-    } catch (error) {
-      const errorMessage = handleError(error, {
-        component: 'Dashboard',
-        action: 'fetchData'
-      });
+    } catch (error: unknown) {
+      const errorMessage = handleError(
+        {
+          component: 'Dashboard',
+          action: 'fetchData'
+        },
+        error
+      );
       setError(errorMessage);
       
       if (error instanceof Error) {

@@ -39,6 +39,7 @@ export async function POST(req: Request) {
           dbConnectionId
         },
         status: 'pending',
+        dbConnectionId
       },
     });
 

@@ -19,6 +19,7 @@ model User {
   notifications Notification[]
   dbConnections DatabaseConnection[]
   indexingJobs  IndexingJob[]
+  webhooks      Webhook[]
 }
 
 model Account {
@@ -85,14 +86,23 @@ model IndexingJob {
 }
 
 model Webhook {
-  id             String      @id @default(cuid())
-  heliusWebhookId String
-  indexingJobId  String
-  secret         String
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  indexingJob    IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
+  id              String       @id @default(cuid())
+  indexingJobId   String
+  userId          String
+  url             String
+  secret          String
+  retryCount      Int         @default(3)
+  retryDelay      Int         @default(1000)
+  heliusWebhookId String      @unique
+  filters         Json
+  status          String      @default("active")
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  logs            WebhookLog[]
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  indexingJob     IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@index([indexingJobId])
 }
 
@@ -106,4 +116,19 @@ model Notification {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+} 
+
+model WebhookLog {
+  id         String   @id @default(cuid())
+  webhookId  String
+  status     String
+  attempt    Int
+  payload    Json
+  response   Json?
+  error      String?
+  timestamp  DateTime @default(now())
+  webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([timestamp])
 } 
