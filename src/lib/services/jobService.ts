@@ -5,24 +5,9 @@ import { AppError } from '@/lib/utils/errorHandling';
 import { IndexingJob, IndexingConfig } from '@/types';
 import AppLogger from '../utils/logger';
 
-const prisma = new PrismaClient();
-
 type JobStatus = 'error' | 'pending' | 'active' | 'paused';
 
 export class JobService {
-  public async getJobStatus(jobId: string, userId: string): Promise<JobStatus> {
-    const job = await prisma.indexingJob.findFirst({
-      where: { id: jobId, userId },
-      select: { status: true }
-    });
-    
-    if (!job) {
-      throw new AppError('Job not found');
-    }
-
-    return job.status as JobStatus;
-  }
-
   private static instance: JobService;
   private redis: Redis;
   private jobQueue: Bull.Queue;
@@ -85,6 +70,19 @@ export class JobService {
     });
   }
 
+  public async getJobStatus(jobId: string, userId: string): Promise<JobStatus> {
+    const job = await this.prisma.indexingJob.findFirst({
+      where: { id: jobId, userId },
+      select: { status: true }
+    });
+    
+    if (!job) {
+      throw new AppError('Job not found');
+    }
+
+    return job.status as JobStatus;
+  }
+
   private determineJobType(config: IndexingConfig): string {
     const enabledCategories = Object.entries(config.categories)
       .filter(([_, enabled]) => enabled)
@@ -99,7 +97,7 @@ export class JobService {
     config: IndexingConfig
   ): Promise<IndexingJob> {
     try {
-      const connection = await prisma.databaseConnection.findFirst({
+      const connection = await this.prisma.databaseConnection.findFirst({
         where: { id: dbConnectionId, userId },
       });
 
@@ -107,7 +105,7 @@ export class JobService {
         throw new AppError('Database connection not found');
       }
 
-      const job = await prisma.indexingJob.create({
+      const job = await this.prisma.indexingJob.create({
         data: {
           userId,
           dbConnectionId,
@@ -136,6 +134,9 @@ export class JobService {
         status: job.status as JobStatus
       };
     } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
       AppLogger.error('Failed to create job', error as Error, {
         component: 'JobService',
         action: 'createJob',
@@ -143,12 +144,12 @@ export class JobService {
         dbConnectionId,
         config
       });
-      throw new AppError('Failed to create job');
+      throw error;
     }
   }
 
   public async getJob(jobId: string, userId: string): Promise<IndexingJob> {
-    const job = await prisma.indexingJob.findFirst({
+    const job = await this.prisma.indexingJob.findFirst({
       where: { id: jobId, userId },
     });
     
@@ -167,7 +168,7 @@ export class JobService {
   }
 
   public async listJobs(userId: string): Promise<IndexingJob[]> {
-    const jobs = await prisma.indexingJob.findMany({
+    const jobs = await this.prisma.indexingJob.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
     });
@@ -183,11 +184,15 @@ export class JobService {
   }
 
   public async pauseJob(jobId: string, userId: string): Promise<IndexingJob> {
-    // Verify job exists and belongs to user
-    await this.getJob(jobId, userId);
+    const job = await this.getJob(jobId, userId);
+    
+    if (job.status !== 'active') {
+      throw new AppError('Job is not active');
+    }
+    
     await this.jobQueue.pause();
     
-    const updatedJob = await prisma.indexingJob.update({
+    const updatedJob = await this.prisma.indexingJob.update({
       where: { id: jobId },
       data: { status: 'paused' },
     });
@@ -203,11 +208,15 @@ export class JobService {
   }
 
   public async resumeJob(jobId: string, userId: string): Promise<IndexingJob> {
-    // Verify job exists and belongs to user
-    await this.getJob(jobId, userId);
+    const job = await this.getJob(jobId, userId);
+    
+    if (job.status !== 'paused') {
+      throw new AppError('Job is not paused');
+    }
+    
     await this.jobQueue.resume();
     
-    const updatedJob = await prisma.indexingJob.update({
+    const updatedJob = await this.prisma.indexingJob.update({
       where: { id: jobId },
       data: { status: 'active' },
     });
@@ -223,13 +232,17 @@ export class JobService {
   }
 
   public async cancelJob(jobId: string, userId: string): Promise<IndexingJob> {
-    // Verify job exists and belongs to user
-    await this.getJob(jobId, userId);
-    await this.jobQueue.removeJobs(jobId);
+    const job = await this.getJob(jobId, userId);
     
-    const updatedJob = await prisma.indexingJob.update({
+    if (job.status === 'error') {
+      throw new AppError('Job is already cancelled or completed');
+    }
+    
+    await this.jobQueue.close();
+    
+    const updatedJob = await this.prisma.indexingJob.update({
       where: { id: jobId },
-      data: { status: 'cancelled' },
+      data: { status: 'error' },
     });
 
     return {
@@ -246,13 +259,14 @@ export class JobService {
     jobId: string, 
     metadata: { webhookId: string; setupAt: string; }
   ): Promise<void> {
-    await prisma.indexingJob.update({
+    await this.prisma.indexingJob.update({
       where: { id: jobId },
-      data: { 
+      data: {
         config: {
           webhookId: metadata.webhookId,
           setupAt: metadata.setupAt
-        }
+        },
+        updatedAt: new Date()
       }
     });
   }
