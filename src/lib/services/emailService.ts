@@ -13,7 +13,7 @@ export interface EmailOptions {
 }
 
 export class EmailService {
-  private static instance: EmailService;
+  private static instance: EmailService | null = null;
   private readonly fromEmail: string;
 
   private constructor() {
@@ -45,6 +45,23 @@ export class EmailService {
         template: options.text
       });
       throw new AppError('Failed to send email');
+    }
+  }
+
+  /**
+   * Cleanup resources used by the service.
+   * This includes cleaning up any open connections or resources.
+   */
+  public async cleanup(): Promise<void> {
+    try {
+      // Reset singleton instance
+      EmailService.instance = null;
+    } catch (error) {
+      AppLogger.error('Failed to cleanup EmailService', error as Error, {
+        component: 'EmailService',
+        action: 'cleanup'
+      });
+      // Don't throw here as this is a cleanup operation
     }
   }
 } 

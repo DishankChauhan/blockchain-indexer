@@ -6,8 +6,6 @@ import { HeliusService } from './heliusService';
 import { EmailService } from './emailService';
 import { createHmac } from 'crypto';
 
-const prisma = new PrismaClient();
-
 // Rate limiting configuration
 interface RateLimitConfig {
   windowMs: number;
@@ -31,13 +29,11 @@ export interface WebhookConfig {
 
 interface WebhookWithConfig extends Webhook {
   config: string | null;
+  filters: string | null;
 }
 
 export class WebhookService {
-  updateWebhook(id: string, arg1: { url: any; secret: any; retryCount: any; retryDelay: any; filters: any; }) {
-    throw new Error('Method not implemented.');
-  }
-  private static instance: WebhookService;
+  private static instance: WebhookService | null = null;
   private readonly maxRetries = 5;
   private readonly initialRetryDelay = 1000; // 1 second
   private heliusService: HeliusService;
@@ -48,18 +44,79 @@ export class WebhookService {
     maxRequests: 60  // 60 requests per minute
   };
   private readonly userId: string;
+  private cleanupInterval: NodeJS.Timeout | undefined;
+  private prisma: PrismaClient;
 
-  private constructor(userId: string) {
+  private constructor(userId: string, prismaClient?: PrismaClient) {
+    if (!userId || userId.trim() === '') {
+      throw new AppError('userId is required');
+    }
     this.userId = userId;
     this.heliusService = HeliusService.getInstance(userId);
     this.emailService = EmailService.getInstance();
+    this.prisma = prismaClient || new PrismaClient();
+    
     // Clean up expired rate limit entries every minute
-    setInterval(() => this.cleanupRateLimits(), 60000);
+    this.cleanupInterval = setInterval(() => {
+      try {
+        this.cleanupRateLimits();
+      } catch (error) {
+        AppLogger.error('Failed to cleanup rate limits', error as Error, {
+          component: 'WebhookService',
+          action: 'cleanupRateLimits'
+        });
+      }
+    }, 60000);
+  }
+
+  public static getInstance(userId: string, prismaClient?: PrismaClient): WebhookService {
+    if (!userId || userId.trim() === '') {
+      throw new AppError('userId is required');
+    }
+    if (!WebhookService.instance) {
+      WebhookService.instance = new WebhookService(userId, prismaClient);
+    }
+    return WebhookService.instance;
+  }
+
+  public static resetInstance(): void {
+    WebhookService.instance = null;
+  }
+
+  public async cleanup(): Promise<void> {
+    try {
+      // Cleanup dependent services
+      await this.heliusService.cleanup();
+      await this.emailService.cleanup();
+      
+      if (this.cleanupInterval) {
+        clearInterval(this.cleanupInterval);
+        this.cleanupInterval = undefined;
+      }
+      
+      this.cleanupRateLimits();
+      await this.prisma.$disconnect();
+      
+      this.rateLimitMap.clear();
+      
+      // Reset singleton instance
+      WebhookService.instance = null;
+      
+      AppLogger.info('WebhookService cleaned up successfully', {
+        userId: this.userId,
+      });
+    } catch (error) {
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      AppLogger.error('Failed to cleanup WebhookService', errorObj, {
+        userId: this.userId,
+      });
+      // Don't throw the error to handle cleanup failures gracefully
+    }
   }
 
   private cleanupRateLimits() {
     const now = Date.now();
-    this.rateLimitMap.forEach((info, webhookId) => {
+    Array.from(this.rateLimitMap.entries()).forEach(([webhookId, info]) => {
       if (info.resetTime <= now) {
         this.rateLimitMap.delete(webhookId);
       }
@@ -85,14 +142,8 @@ export class WebhookService {
     }
 
     info.count++;
+    this.rateLimitMap.set(webhookId, info);
     return true;
-  }
-
-  public static getInstance(userId: string): WebhookService {
-    if (!WebhookService.instance) {
-      WebhookService.instance = new WebhookService(userId);
-    }
-    return WebhookService.instance;
   }
 
   async createWebhook(userId: string, indexingJobId: string, config: WebhookConfig) {
@@ -106,7 +157,7 @@ export class WebhookService {
       });
 
       // Store webhook configuration
-      const webhook = await prisma.webhook.create({
+      const webhook = await this.prisma.webhook.create({
         data: {
           indexingJobId,
           userId,
@@ -115,7 +166,7 @@ export class WebhookService {
           retryCount: config.retryCount ?? 3,
           retryDelay: config.retryDelay ?? 1000,
           heliusWebhookId: heliusWebhook.webhookId,
-          filters: config.filters ?? {},
+          filters: JSON.stringify(config.filters ?? {}),
           status: 'active'
         } as Prisma.WebhookUncheckedCreateInput
       });
@@ -133,7 +184,7 @@ export class WebhookService {
 
   async deleteWebhook(id: string) {
     try {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await this.prisma.webhook.findUnique({
         where: { id }
       });
 
@@ -145,7 +196,7 @@ export class WebhookService {
       await this.heliusService.deleteWebhook(webhook.heliusWebhookId);
 
       // Delete webhook from database
-      await prisma.webhook.delete({
+      await this.prisma.webhook.delete({
         where: { id }
       });
     } catch (error) {
@@ -160,14 +211,14 @@ export class WebhookService {
 
   async getWebhook(id: string) {
     try {
-      const webhook = await prisma.webhook.findUnique({
+      const webhook = await this.prisma.webhook.findUnique({
         where: { id }
       });
 
       if (!webhook) {
         throw new Error('Webhook not found');
       }
-      const logs = await prisma.webhookLog.findMany({
+      const logs = await this.prisma.webhookLog.findMany({
         where: { webhookId: id },
         orderBy: { timestamp: 'desc' },
         take: 10
@@ -186,13 +237,13 @@ export class WebhookService {
 
   async listWebhooks(userId: string) {
     try {
-      const webhooks = await prisma.webhook.findMany({
+      const webhooks = await this.prisma.webhook.findMany({
         where: { userId }
       });
 
       const webhooksWithLogs = await Promise.all(
         webhooks.map(async (webhook) => {
-          const latestLog = await prisma.webhookLog.findFirst({
+          const latestLog = await this.prisma.webhookLog.findFirst({
             where: { webhookId: webhook.id },
             orderBy: { timestamp: 'desc' }
           });
@@ -211,145 +262,55 @@ export class WebhookService {
     }
   }
 
-  async logWebhookEvent(webhookId: string, status: string, attempt: number, payload: any, response?: any, error?: string) {
-    try {
-      const log = await prisma.webhookLog.create({
-        data: {
-          webhookId,
-          status,
-          attempt,
-          payload,
-          response: response || undefined,
-          error: error || undefined
-        }
-      });
+  private verifySignature(secret: string, signature: string, payload: any): boolean {
+    if (!signature || signature.trim() === '') {
+      return false;
+    }
 
-      return log;
-    } catch (err) {
-      AppLogger.error('Failed to log webhook event', err as Error, {
+    try {
+      const expectedSignature = this.generateSignature(secret, payload);
+      return signature === expectedSignature;
+    } catch (error) {
+      AppLogger.error('Failed to verify signature', error as Error, {
         component: 'WebhookService',
-        action: 'logWebhookEvent',
-        webhookId,
-        status,
-        error
+        action: 'verifySignature'
       });
-      // Don't throw here as this is a logging operation
+      return false;
     }
   }
 
-  async handleWebhookEvent(webhookId: string, payload: any, signature: string) {
-    try {
-      const webhook = await prisma.webhook.findUnique({
-        where: { id: webhookId }
-      }) as WebhookWithConfig;
+  private async processWebhookEvent(webhook: WebhookWithConfig, payload: any) {
+    let attempt = 1;
+    const maxAttempts = webhook.retryCount || 3;
+    const baseDelay = webhook.retryDelay || 1000;
 
-      if (!webhook) {
-        throw new AppError('Webhook not found');
-      }
-
-      // Parse config
-      const webhookConfig = webhook.config ? JSON.parse(webhook.config) : {};
-
-      // Check rate limit
-      if (!this.checkRateLimit(webhookId, webhookConfig.rateLimit)) {
-        const error = new AppError('Rate limit exceeded');
-        await this.logWebhookEvent(webhookId, 'failed', 1, payload, undefined, error.message);
-        await this.sendNotification(webhook, webhookConfig, 'Rate limit exceeded for webhook');
-        throw error;
-      }
-
-      // Verify signature
-      if (!this.verifySignature(webhook.secret, payload, signature)) {
-        throw new AppError('Invalid webhook signature');
-      }
-
-      // Validate payload
-      this.validatePayload(payload);
-
-      // Process the webhook event
-      await this.processWebhookEvent(webhook, payload);
-      await this.logWebhookEvent(webhookId, 'success', 1, payload, undefined, undefined);
-    } catch (error) {
-      await this.logWebhookEvent(webhookId, 'failed', 1, payload, undefined, (error as Error).message);
-      const webhook = await prisma.webhook.findUnique({
-        where: { id: webhookId }
-      }) as WebhookWithConfig;
-
-      if (webhook) {
-        const webhookConfig = webhook.config ? JSON.parse(webhook.config) : {};
-        await this.sendNotification(webhook, webhookConfig, `Webhook error: ${(error as Error).message}`);
-        if (webhook.retryCount > 0) {
-          await this.scheduleRetry(webhook, payload, 1);
-        }
-      }
-
-      throw error;
-    }
-  }
-
-  private validatePayload(payload: any) {
-    if (!payload || typeof payload !== 'object') {
-      throw new AppError('Invalid payload: must be a non-null object');
-    }
-
-    // Add specific validation rules based on your payload structure
-    const requiredFields = ['type', 'timestamp'];
-    for (const field of requiredFields) {
-      if (!(field in payload)) {
-        throw new AppError(`Invalid payload: missing required field '${field}'`);
-      }
-    }
-
-    // Validate timestamp
-    if (isNaN(Date.parse(payload.timestamp))) {
-      throw new AppError('Invalid payload: timestamp must be a valid date');
-    }
-  }
-
-  private async processWebhookEvent(webhook: any, payload: any) {
-    try {
-      // Apply filters
-      if (!this.passesFilters(payload, webhook.filters)) {
-        return;
-      }
-
-      // Make HTTP request to webhook URL
-      const response = await fetch(webhook.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Signature': this.generateSignature(webhook.secret, payload),
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-    } catch (error) {
-      throw new AppError(`Failed to process webhook event: ${error}`);
-    }
-  }
-
-  private async scheduleRetry(webhook: any, payload: any, attempt: number) {
-    const retryDelay = this.calculateRetryDelay(attempt, webhook.retryDelay);
-    
-    setTimeout(async () => {
+    while (attempt <= maxAttempts) {
       try {
-        await this.processWebhookEvent(webhook, payload);
-       
-        // Log successful retry
-        await this.logWebhookEvent(webhook.id, 'success', attempt + 1, payload, undefined, undefined);
-      } catch (error) {
-        // Log failed retry
-        await this.logWebhookEvent(webhook.id, 'failed', attempt + 1, payload, undefined, (error as Error).message);
+        const response = await fetch(webhook.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Signature': this.generateSignature(webhook.secret, payload)
+          },
+          body: JSON.stringify(payload)
+        });
 
-        // Schedule next retry if not exceeded max attempts
-        if (attempt < webhook.retryCount) {
-          await this.scheduleRetry(webhook, payload, attempt + 1);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
+
+        return;
+      } catch (error) {
+        if (attempt === maxAttempts) {
+          throw error;
+        }
+
+        // Wait before retrying
+        const delay = this.calculateRetryDelay(attempt, baseDelay);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        attempt++;
       }
-    }, retryDelay);
+    }
   }
 
   private calculateRetryDelay(attempt: number, baseDelay: number): number {
@@ -357,12 +318,6 @@ export class WebhookService {
     const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
     const jitter = Math.random() * 1000; // Add up to 1 second of jitter
     return Math.min(exponentialDelay + jitter, 30000); // Cap at 30 seconds
-  }
-
-  private verifySignature(secret: string, payload: any, signature: string): boolean {
-    const hmac = createHmac('sha256', secret);
-    const calculatedSignature = hmac.update(JSON.stringify(payload)).digest('hex');
-    return calculatedSignature === signature;
   }
 
   private generateSignature(secret: string, payload: any): string {
@@ -414,7 +369,7 @@ export class WebhookService {
     offset?: number;
   } = {}) {
     try {
-      const logs = await prisma.webhookLog.findMany({
+      const logs = await this.prisma.webhookLog.findMany({
         where: {
           webhookId,
           ...(options.startDate && {
@@ -463,7 +418,7 @@ export class WebhookService {
       });
       
       // Log the notification
-      await prisma.webhookLog.create({
+      await this.prisma.webhookLog.create({
         data: {
           webhookId: webhook.id,
           status: 'notification',
@@ -484,6 +439,117 @@ export class WebhookService {
         url: webhook.url
       });
       throw new AppError('Failed to send webhook notification');
+    }
+  }
+
+  private async logWebhookEvent(webhookId: string, status: string, attempt: number, payload: any, response?: any, error?: string): Promise<void> {
+    try {
+      // Convert payload to string if it's not already
+      const payloadString = typeof payload === 'string' 
+        ? payload 
+        : JSON.stringify(payload);
+
+      // Convert response to string if present
+      const responseString = response 
+        ? (typeof response === 'string' ? response : JSON.stringify(response))
+        : undefined;
+
+      await this.prisma.webhookLog.create({
+        data: {
+          webhookId,
+          status,
+          attempt,
+          payload: payloadString,
+          response: responseString,
+          error: error || undefined,
+          timestamp: new Date(),
+        },
+      });
+    } catch (error) {
+      AppLogger.error('Failed to log webhook event', error as Error, {
+        component: 'WebhookService',
+        action: 'logWebhookEvent',
+        webhookId,
+        status,
+        error,
+      });
+    }
+  }
+
+  async handleWebhookEvent(webhookId: string, payload: Record<string, any>, signature: string) {
+    let webhook: WebhookWithConfig | null = null;
+    let attempt = 1;
+
+    try {
+      webhook = await this.prisma.webhook.findUnique({
+        where: { id: webhookId }
+      }) as WebhookWithConfig;
+
+      if (!webhook) {
+        throw new AppError('Webhook not found');
+      }
+
+      // Parse webhook config
+      const config = webhook.config ? JSON.parse(webhook.config) : {};
+      const rateLimit = config.rateLimit || this.defaultRateLimit;
+
+      // Check rate limit
+      if (!this.checkRateLimit(webhookId, rateLimit)) {
+        throw new AppError('Rate limit exceeded');
+      }
+
+      // Verify signature
+      if (!this.verifySignature(webhook.secret, signature, payload)) {
+        throw new AppError('Invalid webhook signature');
+      }
+
+      // Validate filters
+      const filters = webhook.filters ? JSON.parse(webhook.filters as string) : null;
+      if (filters && !this.passesFilters(payload, filters)) {
+        throw new AppError('Payload does not match filters');
+      }
+
+      // Process webhook event
+      await this.processWebhookEvent(webhook, payload);
+
+      // Log success
+      await this.logWebhookEvent(webhookId, 'success', attempt, payload);
+    } catch (error) {
+      // Log failure
+      await this.logWebhookEvent(webhookId, 'failed', attempt, payload, undefined, (error as Error).message);
+
+      // Send notification if configured
+      if (webhook?.config) {
+        const config = JSON.parse(webhook.config);
+        if (config.notificationEmail) {
+          await this.emailService.sendEmail({
+            to: config.notificationEmail,
+            subject: 'Webhook Event Failed',
+            text: `Failed to process webhook event: ${(error as Error).message}`
+          });
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  private validatePayload(payload: any) {
+    if (!payload || typeof payload !== 'object') {
+      throw new AppError('Invalid payload: must be a non-null object');
+    }
+
+    // Add specific validation rules based on your payload structure
+    const requiredFields = ['type', 'timestamp'];
+    for (const field of requiredFields) {
+      if (!(field in payload)) {
+        throw new AppError(`Invalid payload: missing required field '${field}'`);
+      }
+    }
+
+    // Validate timestamp
+    if (isNaN(Date.parse(payload.timestamp))) {
+      throw new AppError('Invalid payload: timestamp must be a valid date');
     }
   }
 } 
