@@ -1,30 +1,41 @@
-import AppLogger from './logger';
+import { ServerLogger, ErrorLogContext } from './serverLogger';
+
+export interface ErrorContext {
+  action?: string;
+  component?: string;
+  userId?: string;
+  [key: string]: any;
+}
 
 export class AppError extends Error {
-  public readonly isOperational: boolean;
-  statusCode: number | undefined;
+  context?: ErrorContext;
 
-  constructor(message: string, isOperational = true) {
+  constructor(message: string, context?: ErrorContext) {
     super(message);
-    this.name = 'AppError';
-    this.isOperational = isOperational;
+    this.name = this.constructor.name;
+    this.context = context;
     Error.captureStackTrace(this, this.constructor);
   }
 }
 
-export function handleError({ component, action }: { component: string; action: string }, error: unknown): never {
-  AppLogger.error(`Error in ${component} during ${action}`, error as Error, {
-    component,
-    action,
-    isOperational: error instanceof AppError ? error.isOperational : false
-  });
+export const handleError = (error: Error | AppError, context?: ErrorContext) => {
+  const errorContext = (error as AppError).context || context;
   
-  if (error instanceof AppError) {
-    throw error;
+  if (process.env.NODE_ENV === 'development') {
+    console.error('Error:', error);
+    if (errorContext) {
+      console.error('Context:', errorContext);
+    }
   }
-  
-  throw new AppError(
-    `Unexpected error in ${component} during ${action}: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    false
-  );
-} 
+
+  ServerLogger.error(error.message, error, errorContext as ErrorLogContext);
+
+  return error;
+};
+
+export const isOperationalError = (error: Error): boolean => {
+  if (error instanceof AppError) {
+    return true;
+  }
+  return false;
+}; 

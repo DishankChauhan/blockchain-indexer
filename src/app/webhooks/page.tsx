@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react';
 import { WebhookService } from '@/lib/services/webhookService';
 import type { WebhookConfig } from '@/lib/services/webhookService';
 import type { WebhookLog } from '@prisma/client';
-import AppLogger from '@/lib/utils/logger';
+import clientLogger from '@/lib/utils/clientLogger';
 import {
   Card,
   CardContent,
@@ -57,7 +57,8 @@ export default function WebhooksPage() {
       setWebhooks(data);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load webhooks';
-      AppLogger.error('Failed to load webhooks', error as Error, {
+      clientLogger.error('Failed to load webhooks', {
+        error: error as Error,
         component: 'WebhooksPage',
         action: 'LoadWebhooks',
         userId: session?.user?.id
@@ -79,7 +80,8 @@ export default function WebhooksPage() {
       setLogs(data);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load webhook logs';
-      AppLogger.error('Failed to load webhook logs', error as Error, {
+      clientLogger.error('Failed to load webhook logs', {
+        error: error as Error,
         component: 'WebhooksPage',
         action: 'LoadWebhookLogs',
         webhookId,
@@ -105,7 +107,7 @@ export default function WebhooksPage() {
         throw new Error('Failed to create webhook');
       }
 
-      AppLogger.info('Webhook created successfully', {
+      clientLogger.info('Webhook created successfully', {
         component: 'WebhooksPage',
         action: 'CreateWebhook',
         userId: session?.user?.id
@@ -125,7 +127,8 @@ export default function WebhooksPage() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create webhook';
-      AppLogger.error('Failed to create webhook', error as Error, {
+      clientLogger.error('Failed to create webhook', {
+        error: error as Error,
         component: 'WebhooksPage',
         action: 'CreateWebhook',
         userId: session?.user?.id
@@ -149,7 +152,7 @@ export default function WebhooksPage() {
         throw new Error('Failed to update webhook');
       }
 
-      AppLogger.info('Webhook updated successfully', {
+      clientLogger.info('Webhook updated successfully', {
         component: 'WebhooksPage',
         action: 'UpdateWebhook',
         webhookId,
@@ -159,7 +162,8 @@ export default function WebhooksPage() {
       await loadWebhooks();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update webhook';
-      AppLogger.error('Failed to update webhook', error as Error, {
+      clientLogger.error('Failed to update webhook', {
+        error: error as Error,
         component: 'WebhooksPage',
         action: 'UpdateWebhook',
         webhookId,
@@ -180,7 +184,7 @@ export default function WebhooksPage() {
         throw new Error('Failed to delete webhook');
       }
 
-      AppLogger.info('Webhook deleted successfully', {
+      clientLogger.info('Webhook deleted successfully', {
         component: 'WebhooksPage',
         action: 'DeleteWebhook',
         webhookId,
@@ -194,7 +198,8 @@ export default function WebhooksPage() {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to delete webhook';
-      AppLogger.error('Failed to delete webhook', error as Error, {
+      clientLogger.error('Failed to delete webhook', {
+        error: error as Error,
         component: 'WebhooksPage',
         action: 'DeleteWebhook',
         webhookId,

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiClient } from '@/lib/api/apiClient';
 import { AppError, handleError } from '@/lib/utils/errorHandling';
@@ -8,37 +8,17 @@ import Link from 'next/link';
 import { toast } from 'react-hot-toast';
 
 // Types
-type User = {
-  id: string;
-  email: string;
-};
+interface DashboardData {
+  user: any;
+  connections: any[];
+  jobs: any[];
+  notifications: any[];
+}
 
-type Notification = {
-  id: string;
-  message: string;
-  type: 'info' | 'success' | 'warning' | 'error';
-  status: 'unread' | 'read';
-};
-
-type DatabaseConnection = {
-  id: string;
-  database: string;
-  status: 'connected' | 'disconnected' | 'error';
-};
-
-type Job = {
-  id: string;
-  status: string;
-  type: string;
-  createdAt: string;
-};
-
-type DashboardData = {
-  user: User;
-  notifications: Notification[];
-  connections: DatabaseConnection[];
-  jobs: Job[];
-};
+interface ApiResponse<T> {
+  data: T;
+  status: number;
+}
 
 // Analytics tracking (replace with your analytics service)
 const trackPageView = () => {
@@ -77,14 +57,14 @@ const ErrorDisplay = ({ message, onRetry }: { message: string; onRetry: () => vo
   </div>
 );
 
-const UserInfo = ({ user }: { user: User }) => (
+const UserInfo = ({ user }: { user: any }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
     <h2 className="text-xl font-semibold mb-4">User Information</h2>
-    <p>Email: {user.email}</p>
+    <p>Email: {user?.email}</p>
   </div>
 );
 
-const ConnectionsList = ({ connections }: { connections: DatabaseConnection[] }) => (
+const ConnectionsList = ({ connections }: { connections: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
     <div className="flex justify-between items-center mb-4">
       <h2 className="text-xl font-semibold">Database Connections</h2>
@@ -134,7 +114,7 @@ const ConnectionsList = ({ connections }: { connections: DatabaseConnection[] })
   </div>
 );
 
-const JobsList = ({ jobs }: { jobs: Job[] }) => (
+const JobsList = ({ jobs }: { jobs: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
     <div className="flex justify-between items-center mb-4">
       <h2 className="text-xl font-semibold">Indexing Jobs</h2>
@@ -199,7 +179,7 @@ const JobsList = ({ jobs }: { jobs: Job[] }) => (
   </div>
 );
 
-const NotificationsList = ({ notifications }: { notifications: Notification[] }) => (
+const NotificationsList = ({ notifications }: { notifications: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6">
     <h2 className="text-xl font-semibold mb-4">Recent Notifications</h2>
     {notifications.length === 0 ? (
@@ -221,55 +201,34 @@ const NotificationsList = ({ notifications }: { notifications: Notification[] })
 
 // Custom hook for dashboard data
 const useDashboardData = () => {
-  const [data, setData] = React.useState<DashboardData | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const router = useRouter();
-  const apiClient = ApiClient.getInstance();
 
-  const fetchData = React.useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const session = await apiClient.get<{ user?: User }>('/api/auth/session');
-      if (!session?.user) {
-        router.push('/auth/signin');
-        return;
+  useEffect(() => {
+    const loadDashboard = async () => {
+      try {
+        setIsLoading(true);
+        const apiClient = ApiClient.getInstance();
+        const response = await apiClient.get<ApiResponse<DashboardData>>('/api/dashboard');
+        setData(response.data);
+      } catch (err) {
+        const error = handleError(err instanceof Error ? err : new Error('Failed to load dashboard'), {
+          component: 'DashboardPage',
+          action: 'loadDashboard'
+        });
+        setError(error.message);
+        toast.error('Failed to load dashboard data');
+      } finally {
+        setIsLoading(false);
       }
+    };
 
-      const [userData, notifications, connections, jobs] = await Promise.all([
-        apiClient.get<User>('/api/user'),
-        apiClient.get<Notification[]>('/api/notifications'),
-        apiClient.get<DatabaseConnection[]>('/api/connections'),
-        apiClient.get<Job[]>('/api/jobs')
-      ]);
+    loadDashboard();
+  }, []);
 
-      setData({ user: userData, notifications, connections, jobs });
-    } catch (error: unknown) {
-      const errorMessage = handleError(
-        {
-          component: 'Dashboard',
-          action: 'fetchData'
-        },
-        error
-      );
-      setError(errorMessage);
-      
-      if (error instanceof Error) {
-        trackError(error);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [apiClient, router]);
-
-  React.useEffect(() => {
-    trackPageView();
-    fetchData();
-  }, [fetchData]);
-
-  return { data, loading, error, retry: fetchData };
+  return { isLoading, error, data };
 };
 
 // Add these functions at the top level of the file
@@ -329,9 +288,9 @@ const stopJob = async (jobId: string) => {
 
 // Main component
 export default function DashboardPage() {
-  const { data, loading, error, retry } = useDashboardData();
+  const { isLoading, error, data } = useDashboardData();
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <LoadingSpinner />
@@ -340,20 +299,34 @@ export default function DashboardPage() {
   }
 
   if (error) {
-    return <ErrorDisplay message={error} onRetry={retry} />;
+    return <ErrorDisplay message={error} onRetry={() => window.location.reload()} />;
   }
 
   if (!data) {
-    return null;
+    return <div className="p-6">No data available</div>;
   }
 
   return (
-    <div className="p-8">
+    <div className="p-6">
       <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-      <UserInfo user={data.user} />
-      <ConnectionsList connections={data.connections} />
-      <JobsList jobs={data.jobs || []} />
-      <NotificationsList notifications={data.notifications} />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4">User Info</h2>
+          <div>{data.user?.email}</div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4">Database Connections</h2>
+          <div>{data.connections?.length || 0} active connections</div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4">Indexing Jobs</h2>
+          <div>{data.jobs?.length || 0} jobs running</div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-xl font-semibold mb-4">Notifications</h2>
+          <div>{data.notifications?.length || 0} unread notifications</div>
+        </div>
+      </div>
     </div>
   );
 } 
