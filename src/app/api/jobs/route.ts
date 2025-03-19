@@ -1,96 +1,72 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import prisma from '@/lib/db';
+import { JobService } from '@/lib/services/jobService';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
 
-export async function POST(req: Request) {
+const jobService = JobService.getInstance();
+
+export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
-
-    if (!user) {
-      return new NextResponse('User not found', { status: 404 });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
     }
 
-    const { type, config } = await req.json();
+    const body = await request.json();
+    const { dbConnectionId, config } = body;
 
-    // Get the first active database connection
-    const connection = await prisma.databaseConnection.findFirst({
-      where: {
-        userId: user.id,
-        status: 'active'
-      }
-    });
-
-    if (!connection) {
-      return new NextResponse('No active database connection found', { status: 400 });
+    if (!dbConnectionId || !config) {
+      throw new AppError('Missing required fields');
     }
 
-    // Create the indexing job
-    const job = await prisma.indexingJob.create({
-      data: {
-        userId: user.id,
-        dbConnectionId: connection.id,
-        type,
-        config,
-        status: 'pending'
-      }
-    });
+    const job = await jobService.createJob(userId, dbConnectionId, config);
 
-    return NextResponse.json({
-      message: 'Indexing job created successfully',
-      job: {
-        id: job.id,
-        type: job.type,
-        status: job.status,
-        createdAt: job.createdAt
-      }
-    });
+    return NextResponse.json(job);
   } catch (error) {
-    console.error('Create job error:', error);
-    return new NextResponse('Failed to create indexing job', { status: 500 });
+    AppLogger.error('Failed to create job', error as Error, {
+      component: 'JobsAPI',
+      action: 'POST',
+      path: '/api/jobs'
+    });
+
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
-
-    if (!user) {
-      return new NextResponse('User not found', { status: 404 });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
     }
 
-    const jobs = await prisma.indexingJob.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        databaseConnection: {
-          select: {
-            database: true,
-            host: true
-          }
-        }
-      }
-    });
-
+    const jobs = await jobService.listJobs(userId);
     return NextResponse.json(jobs);
   } catch (error) {
-    console.error('List jobs error:', error);
-    return new NextResponse('Failed to list indexing jobs', { status: 500 });
+    AppLogger.error('Failed to list jobs', error as Error, {
+      component: 'JobsAPI',
+      action: 'GET',
+      path: '/api/jobs'
+    });
+
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

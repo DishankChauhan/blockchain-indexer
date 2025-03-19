@@ -1,2 +1,8 @@
 import '../src/lib/queue/worker';
-console.log('Worker started. Waiting for jobs...'); 
+import AppLogger from '../src/lib/utils/logger';
+
+AppLogger.info('Worker process started', {
+  component: 'WorkerScript',
+  action: 'Initialize',
+  pid: process.pid
+}); 

@@ -3,7 +3,9 @@
 import React, { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { WebhookService } from '@/lib/services/webhookService';
-import type { WebhookConfig, WebhookLog } from '@/lib/services/webhookService';
+import type { WebhookConfig } from '@/lib/services/webhookService';
+import type { WebhookLog } from '@prisma/client';
+import AppLogger from '@/lib/utils/logger';
 import {
   Card,
   CardContent,
@@ -17,6 +19,7 @@ export default function WebhooksPage() {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [logs, setLogs] = useState<WebhookLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedWebhook, setSelectedWebhook] = useState<string | null>(null);
   const [newWebhook, setNewWebhook] = useState<Partial<WebhookConfig>>({
     url: '',
@@ -45,11 +48,21 @@ export default function WebhooksPage() {
   const loadWebhooks = async () => {
     try {
       setLoading(true);
+      setError(null);
       const response = await fetch('/api/webhooks');
+      if (!response.ok) {
+        throw new Error('Failed to fetch webhooks');
+      }
       const data = await response.json();
       setWebhooks(data);
     } catch (error) {
-      console.error('Failed to load webhooks:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load webhooks';
+      AppLogger.error('Failed to load webhooks', error as Error, {
+        component: 'WebhooksPage',
+        action: 'LoadWebhooks',
+        userId: session?.user?.id
+      });
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -57,17 +70,29 @@ export default function WebhooksPage() {
 
   const loadWebhookLogs = async (webhookId: string) => {
     try {
+      setError(null);
       const response = await fetch(`/api/webhooks/${webhookId}/logs`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch webhook logs');
+      }
       const data = await response.json();
       setLogs(data);
     } catch (error) {
-      console.error('Failed to load webhook logs:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load webhook logs';
+      AppLogger.error('Failed to load webhook logs', error as Error, {
+        component: 'WebhooksPage',
+        action: 'LoadWebhookLogs',
+        webhookId,
+        userId: session?.user?.id
+      });
+      setError(errorMessage);
     }
   };
 
   const handleCreateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setError(null);
       const response = await fetch('/api/webhooks', {
         method: 'POST',
         headers: {
@@ -79,6 +104,12 @@ export default function WebhooksPage() {
       if (!response.ok) {
         throw new Error('Failed to create webhook');
       }
+
+      AppLogger.info('Webhook created successfully', {
+        component: 'WebhooksPage',
+        action: 'CreateWebhook',
+        userId: session?.user?.id
+      });
 
       await loadWebhooks();
       setNewWebhook({
@@ -93,12 +124,19 @@ export default function WebhooksPage() {
         },
       });
     } catch (error) {
-      console.error('Failed to create webhook:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create webhook';
+      AppLogger.error('Failed to create webhook', error as Error, {
+        component: 'WebhooksPage',
+        action: 'CreateWebhook',
+        userId: session?.user?.id
+      });
+      setError(errorMessage);
     }
   };
 
   const handleUpdateWebhook = async (webhookId: string, updates: Partial<WebhookConfig>) => {
     try {
+      setError(null);
       const response = await fetch(`/api/webhooks/${webhookId}`, {
         method: 'PUT',
         headers: {
@@ -111,14 +149,29 @@ export default function WebhooksPage() {
         throw new Error('Failed to update webhook');
       }
 
+      AppLogger.info('Webhook updated successfully', {
+        component: 'WebhooksPage',
+        action: 'UpdateWebhook',
+        webhookId,
+        userId: session?.user?.id
+      });
+
       await loadWebhooks();
     } catch (error) {
-      console.error('Failed to update webhook:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update webhook';
+      AppLogger.error('Failed to update webhook', error as Error, {
+        component: 'WebhooksPage',
+        action: 'UpdateWebhook',
+        webhookId,
+        userId: session?.user?.id
+      });
+      setError(errorMessage);
     }
   };
 
   const handleDeleteWebhook = async (webhookId: string) => {
     try {
+      setError(null);
       const response = await fetch(`/api/webhooks/${webhookId}`, {
         method: 'DELETE',
       });
@@ -127,18 +180,45 @@ export default function WebhooksPage() {
         throw new Error('Failed to delete webhook');
       }
 
+      AppLogger.info('Webhook deleted successfully', {
+        component: 'WebhooksPage',
+        action: 'DeleteWebhook',
+        webhookId,
+        userId: session?.user?.id
+      });
+
       await loadWebhooks();
       if (selectedWebhook === webhookId) {
         setSelectedWebhook(null);
         setLogs([]);
       }
     } catch (error) {
-      console.error('Failed to delete webhook:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to delete webhook';
+      AppLogger.error('Failed to delete webhook', error as Error, {
+        component: 'WebhooksPage',
+        action: 'DeleteWebhook',
+        webhookId,
+        userId: session?.user?.id
+      });
+      setError(errorMessage);
     }
   };
 
   if (loading) {
     return <LoadingSpinner />;
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-red-600">Error</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p>{error}</p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (

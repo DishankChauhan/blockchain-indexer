@@ -1,9 +1,23 @@
-import { PrismaClient, Prisma } from '@prisma/client';
-import { AppError } from '@/lib/utils/errorHandling';
+import { PrismaClient, Prisma, Webhook } from '@prisma/client';
+import { WebhookLog } from '@prisma/client';
+import { AppError } from '../utils/errorHandling';
+import AppLogger from '../utils/logger';
 import { HeliusService } from './heliusService';
+import { EmailService } from './emailService';
 import { createHmac } from 'crypto';
 
 const prisma = new PrismaClient();
+
+// Rate limiting configuration
+interface RateLimitConfig {
+  windowMs: number;
+  maxRequests: number;
+}
+
+interface RateLimitInfo {
+  count: number;
+  resetTime: number;
+}
 
 export interface WebhookConfig {
   url: string;
@@ -11,17 +25,12 @@ export interface WebhookConfig {
   retryCount?: number;
   retryDelay?: number;
   filters?: any;
+  rateLimit?: RateLimitConfig;
+  notificationEmail?: string; // Add email for notifications
 }
 
-export interface WebhookLog {
-  id: string;
-  webhookId: string;
-  status: 'success' | 'failed' | 'retrying';
-  attempt: number;
-  payload: any;
-  response?: any;
-  error?: string;
-  timestamp: Date;
+interface WebhookWithConfig extends Webhook {
+  config: string | null;
 }
 
 export class WebhookService {
@@ -32,14 +41,56 @@ export class WebhookService {
   private readonly maxRetries = 5;
   private readonly initialRetryDelay = 1000; // 1 second
   private heliusService: HeliusService;
+  private emailService: EmailService;
+  private rateLimitMap: Map<string, RateLimitInfo> = new Map();
+  private defaultRateLimit: RateLimitConfig = {
+    windowMs: 60000, // 1 minute
+    maxRequests: 60  // 60 requests per minute
+  };
+  private readonly userId: string;
 
-  private constructor() {
-    this.heliusService = HeliusService.getInstance();
+  private constructor(userId: string) {
+    this.userId = userId;
+    this.heliusService = HeliusService.getInstance(userId);
+    this.emailService = EmailService.getInstance();
+    // Clean up expired rate limit entries every minute
+    setInterval(() => this.cleanupRateLimits(), 60000);
   }
 
-  public static getInstance(): WebhookService {
+  private cleanupRateLimits() {
+    const now = Date.now();
+    this.rateLimitMap.forEach((info, webhookId) => {
+      if (info.resetTime <= now) {
+        this.rateLimitMap.delete(webhookId);
+      }
+    });
+  }
+
+  private checkRateLimit(webhookId: string, config?: RateLimitConfig): boolean {
+    const now = Date.now();
+    const limit = config || this.defaultRateLimit;
+    const info = this.rateLimitMap.get(webhookId);
+
+    if (!info || info.resetTime <= now) {
+      // New or expired entry
+      this.rateLimitMap.set(webhookId, {
+        count: 1,
+        resetTime: now + limit.windowMs
+      });
+      return true;
+    }
+
+    if (info.count >= limit.maxRequests) {
+      return false;
+    }
+
+    info.count++;
+    return true;
+  }
+
+  public static getInstance(userId: string): WebhookService {
     if (!WebhookService.instance) {
-      WebhookService.instance = new WebhookService();
+      WebhookService.instance = new WebhookService(userId);
     }
     return WebhookService.instance;
   }
@@ -71,8 +122,12 @@ export class WebhookService {
 
       return webhook;
     } catch (error) {
-      console.error('Error creating webhook:', error);
-      throw error;
+      AppLogger.error('Failed to create webhook', error as Error, {
+        component: 'WebhookService',
+        action: 'createWebhook',
+        userId: userId
+      });
+      throw new AppError('Failed to create webhook');
     }
   }
 
@@ -94,8 +149,12 @@ export class WebhookService {
         where: { id }
       });
     } catch (error) {
-      console.error('Error deleting webhook:', error);
-      throw error;
+      AppLogger.error('Failed to delete webhook', error as Error, {
+        component: 'WebhookService',
+        action: 'deleteWebhook',
+        webhookId: id
+      });
+      throw new AppError('Failed to delete webhook');
     }
   }
 
@@ -116,8 +175,12 @@ export class WebhookService {
 
       return { ...webhook, logs };
     } catch (error) {
-      console.error('Error getting webhook:', error);
-      throw error;
+      AppLogger.error('Failed to get webhook', error as Error, {
+        component: 'WebhookService',
+        action: 'getWebhook',
+        webhookId: id
+      });
+      throw new AppError('Failed to get webhook');
     }
   }
 
@@ -139,8 +202,12 @@ export class WebhookService {
 
       return webhooksWithLogs;
     } catch (error) {
-      console.error('Error listing webhooks:', error);
-      throw error;
+      AppLogger.error('Failed to list webhooks', error as Error, {
+        component: 'WebhookService',
+        action: 'listWebhooks',
+        userId: userId
+      });
+      throw new AppError('Failed to list webhooks');
     }
   }
 
@@ -159,19 +226,36 @@ export class WebhookService {
 
       return log;
     } catch (err) {
-      console.error('Error logging webhook event:', err);
-      throw err;
+      AppLogger.error('Failed to log webhook event', err as Error, {
+        component: 'WebhookService',
+        action: 'logWebhookEvent',
+        webhookId,
+        status,
+        error
+      });
+      // Don't throw here as this is a logging operation
     }
   }
 
   async handleWebhookEvent(webhookId: string, payload: any, signature: string) {
     try {
       const webhook = await prisma.webhook.findUnique({
-        where: { id: webhookId },
-      });
+        where: { id: webhookId }
+      }) as WebhookWithConfig;
 
       if (!webhook) {
         throw new AppError('Webhook not found');
+      }
+
+      // Parse config
+      const webhookConfig = webhook.config ? JSON.parse(webhook.config) : {};
+
+      // Check rate limit
+      if (!this.checkRateLimit(webhookId, webhookConfig.rateLimit)) {
+        const error = new AppError('Rate limit exceeded');
+        await this.logWebhookEvent(webhookId, 'failed', 1, payload, undefined, error.message);
+        await this.sendNotification(webhook, webhookConfig, 'Rate limit exceeded for webhook');
+        throw error;
       }
 
       // Verify signature
@@ -179,23 +263,46 @@ export class WebhookService {
         throw new AppError('Invalid webhook signature');
       }
 
+      // Validate payload
+      this.validatePayload(payload);
+
       // Process the webhook event
       await this.processWebhookEvent(webhook, payload);
-      // Log successful event
       await this.logWebhookEvent(webhookId, 'success', 1, payload, undefined, undefined);
     } catch (error) {
-      // Log failed event
       await this.logWebhookEvent(webhookId, 'failed', 1, payload, undefined, (error as Error).message);
-      const webhookData = await prisma.webhook.findUnique({
-        where: { id: webhookId },
-      });
+      const webhook = await prisma.webhook.findUnique({
+        where: { id: webhookId }
+      }) as WebhookWithConfig;
 
-      // Retry if configured
-      if (webhookData && webhookData.retryCount > 0) {
-        await this.scheduleRetry(webhookData, payload, 1);
+      if (webhook) {
+        const webhookConfig = webhook.config ? JSON.parse(webhook.config) : {};
+        await this.sendNotification(webhook, webhookConfig, `Webhook error: ${(error as Error).message}`);
+        if (webhook.retryCount > 0) {
+          await this.scheduleRetry(webhook, payload, 1);
+        }
       }
 
       throw error;
+    }
+  }
+
+  private validatePayload(payload: any) {
+    if (!payload || typeof payload !== 'object') {
+      throw new AppError('Invalid payload: must be a non-null object');
+    }
+
+    // Add specific validation rules based on your payload structure
+    const requiredFields = ['type', 'timestamp'];
+    for (const field of requiredFields) {
+      if (!(field in payload)) {
+        throw new AppError(`Invalid payload: missing required field '${field}'`);
+      }
+    }
+
+    // Validate timestamp
+    if (isNaN(Date.parse(payload.timestamp))) {
+      throw new AppError('Invalid payload: timestamp must be a valid date');
     }
   }
 
@@ -334,6 +441,49 @@ export class WebhookService {
       return logs;
     } catch (error) {
       throw new AppError(`Failed to get webhook logs: ${error}`);
+    }
+  }
+
+  private async sendNotification(webhook: any, config: any, message: string) {
+    if (!config.notificationEmail) return;
+
+    try {
+      // Send email notification
+      const emailSent = await this.emailService.sendEmail({
+        to: config.notificationEmail,
+        subject: `Webhook Notification - ${webhook.id}`,
+        text: message,
+        html: `
+          <h2>Webhook Notification</h2>
+          <p><strong>Webhook ID:</strong> ${webhook.id}</p>
+          <p><strong>URL:</strong> ${webhook.url}</p>
+          <p><strong>Message:</strong> ${message}</p>
+          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+        `
+      });
+      
+      // Log the notification
+      await prisma.webhookLog.create({
+        data: {
+          webhookId: webhook.id,
+          status: 'notification',
+          attempt: 1,
+          payload: { 
+            message,
+            emailSent,
+            emailAddress: config.notificationEmail 
+          },
+          timestamp: new Date()
+        }
+      });
+    } catch (error) {
+      AppLogger.error('Failed to send webhook notification', error as Error, {
+        component: 'WebhookService',
+        action: 'sendNotification',
+        webhookId: webhook.id,
+        url: webhook.url
+      });
+      throw new AppError('Failed to send webhook notification');
     }
   }
 } 

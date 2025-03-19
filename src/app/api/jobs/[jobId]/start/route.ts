@@ -1,81 +1,49 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import prisma from '@/lib/db';
-import Bull from 'bull';
-import Redis from 'ioredis';
+import { JobService } from '@/lib/services/jobService';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
 
-// Initialize Redis and Bull queue
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-const indexingQueue = new Bull('indexing', {
-  redis: {
-    port: 6379,
-    host: 'localhost',
-  },
-});
+const jobService = JobService.getInstance();
 
 export async function POST(
-  req: Request,
+  request: Request,
   { params }: { params: { jobId: string } }
 ) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
-
-    if (!user) {
-      return new NextResponse('User not found', { status: 404 });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
     }
 
     const { jobId } = params;
+    const job = await jobService.resumeJob(jobId, userId);
 
-    // Get the job
-    const job = await prisma.indexingJob.findFirst({
-      where: {
-        id: jobId,
-        userId: user.id
-      },
-      include: {
-        databaseConnection: true
-      }
+    AppLogger.info('Job started successfully', {
+      component: 'JobStartAPI',
+      action: 'POST',
+      jobId,
+      userId
     });
 
-    if (!job) {
-      return new NextResponse('Job not found', { status: 404 });
-    }
-
-    // Add job to the queue
-    await indexingQueue.add('start-indexing', {
-      jobId: job.id,
-      type: job.type,
-      config: job.config,
-      dbConnection: {
-        host: job.databaseConnection.host,
-        port: job.databaseConnection.port,
-        database: job.databaseConnection.database,
-        username: job.databaseConnection.username,
-        password: job.databaseConnection.password
-      }
-    });
-
-    // Update job status
-    await prisma.indexingJob.update({
-      where: { id: jobId },
-      data: { 
-        status: 'active',
-        lastRunAt: new Date()
-      }
-    });
-
-    return NextResponse.json({ message: 'Job started successfully' });
+    return NextResponse.json(job);
   } catch (error) {
-    console.error('Start job error:', error);
-    return new NextResponse('Failed to start job', { status: 500 });
+    AppLogger.error('Failed to start job', error as Error, {
+      component: 'JobStartAPI',
+      action: 'POST',
+      path: `/api/jobs/${params.jobId}/start`,
+      jobId: params.jobId
+    });
+
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

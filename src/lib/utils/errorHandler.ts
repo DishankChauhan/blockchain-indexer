@@ -1,5 +1,6 @@
 import { sendNotification } from '../services/notificationService';
 import { NotificationType } from '@/types/notification';
+import AppLogger from './logger';
 
 export interface ErrorResponse {
   error: {
@@ -32,14 +33,17 @@ export async function handleError(
   // Determine error type and severity
   const { type, severity } = categorizeError(error);
 
-  // Log error details
-  console.error('Error occurred:', {
+  // Log error details with structured logging
+  AppLogger.error(error.message, error, {
+    component: 'ErrorHandler',
+    action: 'handleError',
     errorId,
     timestamp,
-    name: error.name,
-    message: error.message,
-    stack: error.stack,
-    context,
+    type,
+    severity,
+    userId,
+    context: JSON.stringify(context),
+    isIndexingError: error instanceof IndexingError
   });
 
   // Send notification based on severity
@@ -49,13 +53,11 @@ export async function handleError(
       NotificationType.ERROR,
       {
         userId,
-        channel: ['email', 'webhook', 'database'],
-        priority: 'high',
         metadata: {
           errorId,
           type,
-          context,
-        },
+          context
+        }
       }
     );
   } else if (severity === 'medium') {

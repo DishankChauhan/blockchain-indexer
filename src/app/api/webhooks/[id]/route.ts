@@ -1,36 +1,53 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { WebhookService } from '@/lib/services/webhookService';
-import { prisma } from '@/lib/db';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+
+const webhookService = WebhookService.getInstance();
 
 export async function GET(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const webhook = await prisma.webhook.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-    });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
+
+    const { id } = params;
+    const webhook = await webhookService.getWebhook(id);
 
     if (!webhook) {
-      return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
+      throw new AppError('Webhook not found');
+    }
+
+    if (webhook.userId !== userId) {
+      throw new AppError('Unauthorized');
     }
 
     return NextResponse.json(webhook);
   } catch (error) {
-    console.error('Failed to get webhook:', error);
-    return NextResponse.json(
-      { error: 'Failed to get webhook' },
-      { status: 500 }
-    );
+    AppLogger.error('Failed to get webhook', error as Error, {
+      component: 'WebhookAPI',
+      action: 'GET',
+      path: `/api/webhooks/${params.id}`,
+      webhookId: params.id
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -39,40 +56,60 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const webhook = await prisma.webhook.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-    });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
+
+    const { id } = params;
+    const webhook = await webhookService.getWebhook(id);
 
     if (!webhook) {
-      return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
+      throw new AppError('Webhook not found');
+    }
+
+    if (webhook.userId !== userId) {
+      throw new AppError('Unauthorized');
     }
 
     const body = await request.json();
-    const webhookService = WebhookService.getInstance();
-    
-    const updatedWebhook = await webhookService.updateWebhook(params.id, {
-      url: body.url,
-      secret: body.secret,
-      retryCount: body.retryCount,
-      retryDelay: body.retryDelay,
-      filters: body.filters,
+    const { url, secret, retryCount, retryDelay, filters } = body;
+
+    const updatedWebhook = await webhookService.updateWebhook(id, {
+      url,
+      secret,
+      retryCount,
+      retryDelay,
+      filters
+    });
+
+    AppLogger.info('Webhook updated successfully', {
+      component: 'WebhookAPI',
+      action: 'PUT',
+      webhookId: id,
+      userId
     });
 
     return NextResponse.json(updatedWebhook);
   } catch (error) {
-    console.error('Failed to update webhook:', error);
-    return NextResponse.json(
-      { error: 'Failed to update webhook' },
-      { status: 500 }
-    );
+    AppLogger.error('Failed to update webhook', error as Error, {
+      component: 'WebhookAPI',
+      action: 'PUT',
+      path: `/api/webhooks/${params.id}`,
+      webhookId: params.id
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -81,31 +118,50 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const webhook = await prisma.webhook.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-    });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
+
+    const { id } = params;
+    const webhook = await webhookService.getWebhook(id);
 
     if (!webhook) {
-      return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
+      throw new AppError('Webhook not found');
     }
 
-    const webhookService = WebhookService.getInstance();
-    await webhookService.deleteWebhook(params.id);
+    if (webhook.userId !== userId) {
+      throw new AppError('Unauthorized');
+    }
 
-    return NextResponse.json({ success: true });
+    await webhookService.deleteWebhook(id);
+
+    AppLogger.info('Webhook deleted successfully', {
+      component: 'WebhookAPI',
+      action: 'DELETE',
+      webhookId: id,
+      userId
+    });
+
+    return NextResponse.json({ message: 'Webhook deleted successfully' });
   } catch (error) {
-    console.error('Failed to delete webhook:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete webhook' },
-      { status: 500 }
-    );
+    AppLogger.error('Failed to delete webhook', error as Error, {
+      component: 'WebhookAPI',
+      action: 'DELETE',
+      path: `/api/webhooks/${params.id}`,
+      webhookId: params.id
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

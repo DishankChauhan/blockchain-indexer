@@ -3,12 +3,13 @@ import { Redis } from 'ioredis';
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '@/lib/utils/errorHandling';
 import { IndexingJob, IndexingConfig } from '@/types';
+import AppLogger from '../utils/logger';
 
 const prisma = new PrismaClient();
 
 type JobStatus = 'error' | 'pending' | 'active' | 'paused';
 
-class JobService {
+export class JobService {
   public async getJobStatus(jobId: string, userId: string): Promise<JobStatus> {
     const job = await prisma.indexingJob.findFirst({
       where: { id: jobId, userId },
@@ -25,6 +26,7 @@ class JobService {
   private static instance: JobService;
   private redis: Redis;
   private jobQueue: Bull.Queue;
+  private prisma: PrismaClient;
 
   private constructor() {
     this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
@@ -40,6 +42,7 @@ class JobService {
         removeOnFail: false,
       },
     });
+    this.prisma = new PrismaClient();
     this.setupQueueHandlers();
   }
 
@@ -52,24 +55,32 @@ class JobService {
 
   private setupQueueHandlers(): void {
     this.jobQueue.on('error', (error: Error) => {
-      console.error('Job queue error:', error);
+      AppLogger.error('Job queue error', error, {
+        component: 'JobService',
+        action: 'queueHandler'
+      });
     });
 
     this.jobQueue.on('failed', async (job: Job, error: Error) => {
       try {
-        await prisma.indexingJob.update({
-          where: { id: job.data.jobId },
+        await this.prisma.indexingJob.update({
+          where: { id: job.id.toString() },
           data: {
-            status: 'error',
+            status: 'failed',
             config: {
               ...job.data.config,
               error: error.message,
               failedAt: new Date().toISOString()
-            }
+            },
+            updatedAt: new Date()
           }
         });
       } catch (dbError) {
-        console.error('Failed to update job status:', dbError);
+        AppLogger.error('Failed to update job status', dbError as Error, {
+          component: 'JobService',
+          action: 'updateFailedJob',
+          jobId: job.id.toString()
+        });
       }
     });
   }
@@ -125,6 +136,13 @@ class JobService {
         status: job.status as JobStatus
       };
     } catch (error) {
+      AppLogger.error('Failed to create job', error as Error, {
+        component: 'JobService',
+        action: 'createJob',
+        userId,
+        dbConnectionId,
+        config
+      });
       throw new AppError('Failed to create job');
     }
   }

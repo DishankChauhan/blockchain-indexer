@@ -1,5 +1,8 @@
+import AppLogger from './logger';
+
 export class AppError extends Error {
   public readonly isOperational: boolean;
+  statusCode: number | undefined;
 
   constructor(message: string, isOperational = true) {
     super(message);
@@ -10,7 +13,11 @@ export class AppError extends Error {
 }
 
 export function handleError({ component, action }: { component: string; action: string }, error: unknown): never {
-  console.error(`Error in ${component} during ${action}:`, error);
+  AppLogger.error(`Error in ${component} during ${action}`, error as Error, {
+    component,
+    action,
+    isOperational: error instanceof AppError ? error.isOperational : false
+  });
   
   if (error instanceof AppError) {
     throw error;

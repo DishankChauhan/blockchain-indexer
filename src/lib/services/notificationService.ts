@@ -3,6 +3,7 @@ import {
   NotificationOptions, 
   NotificationResponse 
 } from '@/types/notification';
+import AppLogger from '@/lib/utils/logger';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 5000, 15000]; // Exponential backoff in milliseconds
@@ -98,7 +99,12 @@ async function sendNotificationWithRetry(
     }
 
     // Handle unexpected errors
-    console.error('Unexpected notification error:', error);
+    AppLogger.error('Unexpected notification error', error as Error, {
+      component: 'NotificationService',
+      action: 'handleNotification',
+      notificationType: type,
+      userId: options.userId
+    });
     throw new NotificationError(
       'An unexpected error occurred',
       'UNEXPECTED_ERROR',
@@ -141,11 +147,12 @@ export async function sendNotification(
     return await sendNotificationWithRetry(message, type, defaultOptions);
   } catch (error) {
     // Log error for monitoring
-    console.error('Notification service error:', {
-      error,
-      message,
-      type,
-      options,
+    AppLogger.error('Notification service error', error as Error, {
+      component: 'NotificationService',
+      action: 'sendNotification',
+      notificationType: type,
+      userId: options.userId,
+      metadata: JSON.stringify(options)
     });
 
     // Rethrow NotificationError instances

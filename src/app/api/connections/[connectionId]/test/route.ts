@@ -2,17 +2,25 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { DatabaseService } from '@/lib/services/databaseService';
-import prisma from '@/lib/db';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export async function POST(
-  req: Request,
+  request: Request,
   { params }: { params: { connectionId: string } }
 ) {
   try {
     const session = await getServerSession(authOptions);
-    
     if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+      AppLogger.warn('Unauthorized access attempt to test connection', {
+        component: 'ConnectionsAPI',
+        action: 'TestConnection',
+        connectionId: params.connectionId
+      });
+      throw new AppError('Unauthorized');
     }
 
     const user = await prisma.user.findUnique({
@@ -20,22 +28,21 @@ export async function POST(
     });
 
     if (!user) {
-      return new NextResponse('User not found', { status: 404 });
+      throw new AppError('User not found');
     }
 
-    const { connectionId } = params;
     const dbService = DatabaseService.getInstance();
 
     // Get the connection details
     const connection = await prisma.databaseConnection.findFirst({
       where: {
-        id: connectionId,
+        id: params.connectionId,
         userId: user.id
       }
     });
 
     if (!connection) {
-      return new NextResponse('Connection not found', { status: 404 });
+      throw new AppError('Connection not found');
     }
 
     // Test the connection
@@ -48,11 +55,29 @@ export async function POST(
     });
 
     // Update connection status
-    await dbService.updateConnectionStatus(connectionId, user.id, 'active');
+    await dbService.updateConnectionStatus(params.connectionId, user.id, 'active');
 
-    return NextResponse.json({ message: 'Connection test successful' });
+    AppLogger.info('Connection test successful', {
+      component: 'ConnectionsAPI',
+      action: 'TestConnection',
+      connectionId: params.connectionId,
+      userId: user.id
+    });
+
+    return NextResponse.json({ success: true, message: 'Connection test successful' });
   } catch (error) {
-    console.error('Test connection error:', error);
-    return new NextResponse('Failed to test connection', { status: 500 });
+    AppLogger.error('Failed to test connection', error as Error, {
+      component: 'ConnectionsAPI',
+      action: 'TestConnection',
+      connectionId: params.connectionId,
+      path: `/api/connections/${params.connectionId}/test`
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

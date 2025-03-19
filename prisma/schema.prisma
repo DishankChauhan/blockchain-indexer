@@ -80,24 +80,29 @@ model IndexingJob {
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   databaseConnection DatabaseConnection @relation(fields: [dbConnectionId], references: [id], onDelete: Cascade)
   webhooks        Webhook[]
+  processedData   ProcessedData[]
+  progress        Int         @default(0)
 
   @@index([userId])
   @@index([dbConnectionId])
+  @@index([type])
+  @@index([status])
 }
 
 model Webhook {
-  id              String       @id @default(cuid())
+  id              String      @id @default(cuid())
   indexingJobId   String
   userId          String
   url             String
   secret          String
-  retryCount      Int         @default(3)
-  retryDelay      Int         @default(1000)
-  heliusWebhookId String      @unique
-  filters         Json
-  status          String      @default("active")
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  retryCount      Int        @default(3)
+  retryDelay      Int        @default(1000)
+  heliusWebhookId String
+  filters         Json       @default("{}")
+  status          String     @default("active")
+  config          Json?      @default("{\"rateLimit\":{\"windowMs\":60000,\"maxRequests\":60}}")
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
   logs            WebhookLog[]
   user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   indexingJob     IndexingJob @relation(fields: [indexingJobId], references: [id], onDelete: Cascade)
@@ -130,5 +135,27 @@ model WebhookLog {
   webhook    Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId])
+  @@index([timestamp])
+}
+
+model ProcessedData {
+  id        String   @id @default(cuid())
+  jobId     String
+  data      Json
+  timestamp DateTime @default(now())
+  job       IndexingJob @relation(fields: [jobId], references: [id])
+
+  @@index([jobId])
+  @@index([timestamp])
+}
+
+model Aggregation {
+  id        String   @id @default(cuid())
+  type      String
+  field     String
+  value     Json
+  timestamp DateTime @default(now())
+
+  @@index([type, field])
   @@index([timestamp])
 } 

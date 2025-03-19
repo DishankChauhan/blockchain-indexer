@@ -1,42 +1,60 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { WebhookService } from '@/lib/services/webhookService';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+import { verifyWebhookSignature } from '@/lib/webhookUtils';
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
-    const body = await req.json();
-    const { jobId, status, data } = body;
+    const signature = request.headers.get('x-signature');
+    const timestamp = request.headers.get('x-timestamp');
+    const body = await request.json();
+    const { webhookId, payload } = body;
 
-    // Verify webhook secret
-    const webhookSecret = req.headers.get('x-webhook-secret');
-    const job = await prisma.indexingJob.findUnique({
-      where: { id: jobId },
-      include: { webhooks: true }
-    });
-
-    if (!job || !job.webhooks[0] || job.webhooks[0].secret !== webhookSecret) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!webhookId || !payload) {
+      AppLogger.warn('Invalid webhook request', {
+        component: 'WebhookAPI',
+        action: 'ProcessWebhook',
+        webhookId: webhookId || 'missing',
+        hasPayload: !!payload
+      });
+      throw new AppError('Invalid webhook request');
     }
 
-    // Update job status
-    await prisma.indexingJob.update({
-      where: { id: jobId },
-      data: { status }
+    // Verify webhook signature
+    if (!verifyWebhookSignature(payload, signature, timestamp)) {
+      AppLogger.warn('Invalid webhook signature', {
+        component: 'WebhookAPI',
+        action: 'VerifySignature',
+        webhookId,
+        hasSignature: !!signature,
+        hasTimestamp: !!timestamp
+      });
+      throw new AppError('Invalid webhook signature');
+    }
+
+    const webhookService = WebhookService.getInstance();
+    await webhookService.handleWebhookEvent(webhookId, payload, signature || '');
+
+    AppLogger.info('Webhook processed successfully', {
+      component: 'WebhookAPI',
+      action: 'ProcessWebhook',
+      webhookId
     });
 
-    // Create notification
-    await prisma.notification.create({
-      data: {
-        userId: job.userId,
-        type: 'indexing_update',
-        message: `Indexing job ${jobId} status: ${status}`,
-        status: 'unread',
-        metadata: data
-      }
-    });
-
-    return NextResponse.json({ message: 'Webhook processed successfully' });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Webhook error:', error);
-    return new NextResponse('Failed to process webhook', { status: 500 });
+    AppLogger.error('Failed to process webhook', error as Error, {
+      component: 'WebhookAPI',
+      action: 'ProcessWebhook',
+      path: '/api/webhook'
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('Invalid signature') ? 401 :
+                        error.message.includes('not found') ? 404 : 400;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

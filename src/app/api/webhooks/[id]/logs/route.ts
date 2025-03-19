@@ -1,46 +1,56 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { WebhookService } from '@/lib/services/webhookService';
-import { prisma } from '@/lib/db';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+
+const webhookService = WebhookService.getInstance();
 
 export async function GET(
   request: Request,
   { params }: { params: { id: string } }
 ) {
   try {
-    const session = await getServerSession();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const webhook = await prisma.webhook.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-    });
-
-    if (!webhook) {
-      return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
     }
 
-    const webhookService = WebhookService.getInstance();
+    const { id } = params;
     const { searchParams } = new URL(request.url);
     
-    const logs = await webhookService.getWebhookLogs(params.id, {
-      startDate: searchParams.get('startDate') ? new Date(searchParams.get('startDate')!) : undefined,
-      endDate: searchParams.get('endDate') ? new Date(searchParams.get('endDate')!) : undefined,
-      status: searchParams.get('status') as any,
-      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : undefined,
-      offset: searchParams.get('offset') ? parseInt(searchParams.get('offset')!) : undefined,
+    const startDate = searchParams.get('startDate') ? new Date(searchParams.get('startDate')!) : undefined;
+    const endDate = searchParams.get('endDate') ? new Date(searchParams.get('endDate')!) : undefined;
+    const status = searchParams.get('status') as 'success' | 'failed' | 'retrying' | undefined;
+    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : undefined;
+    const offset = searchParams.get('offset') ? parseInt(searchParams.get('offset')!) : undefined;
+
+    const logs = await webhookService.getWebhookLogs(id, {
+      startDate,
+      endDate,
+      status,
+      limit,
+      offset
     });
 
     return NextResponse.json(logs);
   } catch (error) {
-    console.error('Failed to get webhook logs:', error);
-    return NextResponse.json(
-      { error: 'Failed to get webhook logs' },
-      { status: 500 }
-    );
+    AppLogger.error('Failed to get webhook logs', error as Error, {
+      component: 'WebhookLogsAPI',
+      action: 'GET',
+      path: `/api/webhooks/${params.id}/logs`,
+      webhookId: params.id
+    });
+
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

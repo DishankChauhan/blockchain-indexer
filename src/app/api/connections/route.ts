@@ -2,60 +2,90 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { DatabaseService } from '@/lib/services/databaseService';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
 import { DatabaseCredentials } from '@/types';
-import prisma from '@/lib/db';
 
-export async function POST(req: Request) {
+const databaseService = DatabaseService.getInstance();
+
+export async function GET(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    // Get the user from the database
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
+
+    const connections = await databaseService.listConnections(userId);
+    return NextResponse.json(connections);
+  } catch (error) {
+    AppLogger.error('Failed to list connections', error as Error, {
+      component: 'ConnectionsAPI',
+      action: 'GET',
+      path: '/api/connections'
     });
 
-    if (!user) {
-      return new NextResponse('User not found', { status: 404 });
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
     }
-
-    const credentials: DatabaseCredentials = await req.json();
-    const dbService = DatabaseService.getInstance();
-    
-    await dbService.saveConnection(user.id, credentials);
-
-    return NextResponse.json({ message: 'Database connection created successfully' });
-  } catch (error) {
-    console.error('Create connection error:', error);
-    return new NextResponse('Failed to create database connection', { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function GET() {
+export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.email) {
-      return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
+
+    const body = await request.json();
+    const credentials: DatabaseCredentials = {
+      host: body.host,
+      port: Number(body.port),
+      database: body.database,
+      username: body.username,
+      password: body.password
+    };
+
+    if (!credentials.host || !credentials.port || !credentials.database || 
+        !credentials.username || !credentials.password) {
+      throw new AppError('Missing required fields');
+    }
+
+    await databaseService.saveConnection(userId, credentials);
+
+    AppLogger.info('Database connection created successfully', {
+      component: 'ConnectionsAPI',
+      action: 'POST',
+      userId,
+      connectionHost: credentials.host
     });
 
-    if (!user) {
-      return new NextResponse('User not found', { status: 404 });
-    }
-
-    const dbService = DatabaseService.getInstance();
-    const connections = await dbService.listConnections(user.id);
-
-    return NextResponse.json(connections);
+    return NextResponse.json({ message: 'Database connection created successfully' });
   } catch (error) {
-    console.error('List connections error:', error);
-    return new NextResponse('Failed to list database connections', { status: 500 });
+    AppLogger.error('Failed to create connection', error as Error, {
+      component: 'ConnectionsAPI',
+      action: 'POST',
+      path: '/api/connections'
+    });
+
+    if (error instanceof AppError) {
+      const statusCode = error.message.includes('not found') ? 404 :
+                        error.message.includes('Unauthorized') ? 403 : 401;
+      return NextResponse.json({ error: error.message }, { status: statusCode });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-} 
+}

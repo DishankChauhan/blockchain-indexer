@@ -3,24 +3,22 @@ import { IndexingJob, IndexingConfig } from '@/types';
 import { AppError } from '@/lib/utils/errorHandling';
 import { DatabaseService } from './databaseService';
 import JobService from './jobService';
-
-// Types for Helius API responses and requests
-interface HeliusWebhookRequest {
-  accountAddresses: string[];
-  programIds: string[];
-  webhookURL: string;
-  webhookType: 'enhanced';
-  authHeader: string;
-  txnType: string[];
-}
-
-interface HeliusWebhookResponse {
-  webhookId: string;
-}
-
-interface HeliusErrorResponse {
-  message: string;
-}
+import AppLogger from '@/lib/utils/logger';
+import { SecretsManager } from '@/lib/utils/secrets';
+import { RateLimiter } from '@/lib/utils/rateLimiter';
+import { CircuitBreaker } from '@/lib/utils/circuitBreaker';
+import {
+  HeliusTransaction,
+  HeliusWebhookData,
+  HeliusWebhookRequest,
+  HeliusWebhookResponse,
+  HeliusErrorResponse,
+  HeliusProcessingResult
+} from '@/lib/types/helius';
+import { NFTBidService } from './nftBidService';
+import { NFTPriceService } from './nftPriceService';
+import { LendingService } from './lendingService';
+import { TokenPriceService } from './tokenPriceService';
 
 class HeliusError extends Error {
   constructor(message: string, public readonly details?: any) {
@@ -29,28 +27,83 @@ class HeliusError extends Error {
   }
 }
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_API_URL = 'https://api.helius.xyz/v0';
+
+interface JobMetadata {
+  lastProcessedTimestamp: number;
+  processedCount: number;
+  errorCount: number;
+}
 
 export class HeliusService {
   private static instance: HeliusService;
-  private dbService: DatabaseService;
+  private readonly dbService: DatabaseService;
+  private readonly userId: string;
   private jobService: JobService;
-  private apiKey: string;
+  private secretsManager: SecretsManager;
+  private rateLimiter: RateLimiter;
+  private circuitBreaker: CircuitBreaker;
   private baseUrl: string;
 
-  private constructor() {
+  private constructor(userId: string) {
     this.dbService = DatabaseService.getInstance();
+    this.userId = userId;
     this.jobService = JobService.getInstance();
-    this.apiKey = HELIUS_API_KEY || '';
+    this.secretsManager = SecretsManager.getInstance();
+    this.rateLimiter = RateLimiter.getInstance();
+    this.circuitBreaker = CircuitBreaker.getInstance();
     this.baseUrl = HELIUS_API_URL;
   }
 
-  public static getInstance(): HeliusService {
+  public static getInstance(userId: string): HeliusService {
     if (!HeliusService.instance) {
-      HeliusService.instance = new HeliusService();
+      HeliusService.instance = new HeliusService(userId);
     }
     return HeliusService.instance;
+  }
+
+  private async getApiKey(): Promise<string> {
+    try {
+      return await this.secretsManager.getSecret('HELIUS_API_KEY');
+    } catch (error) {
+      const apiKey = process.env.HELIUS_API_KEY;
+      if (!apiKey) {
+        throw new AppError('Helius API key not found');
+      }
+      await this.secretsManager.setSecret('HELIUS_API_KEY', apiKey);
+      return apiKey;
+    }
+  }
+
+  private async makeRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', body?: unknown): Promise<T> {
+    // Check rate limit
+    if (!(await this.rateLimiter.waitForToken('helius'))) {
+      throw new AppError('Rate limit exceeded for Helius API');
+    }
+
+    return this.circuitBreaker.executeWithRetry('helius', async () => {
+      const apiKey = await this.getApiKey();
+      const url = new URL(endpoint, this.baseUrl);
+      url.searchParams.append('api-key', apiKey);
+
+      const response = await fetch(url.toString(), {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json() as HeliusErrorResponse;
+        throw new HeliusError(errorData.message || 'API request failed', {
+          status: response.status,
+          statusText: response.statusText,
+        });
+      }
+
+      return await response.json() as T;
+    });
   }
 
   /**
@@ -70,6 +123,9 @@ export class HeliusService {
         throw new HeliusError('Invalid webhook URL. Must be a valid HTTP(S) URL');
       }
 
+      // Get API key
+      const apiKey = await this.getApiKey();
+
       // Prepare request body
       const webhookRequest: HeliusWebhookRequest = {
         accountAddresses,
@@ -85,7 +141,7 @@ export class HeliusService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify(webhookRequest)
       });
@@ -118,10 +174,12 @@ export class HeliusService {
    */
   async deleteWebhook(webhookId: string): Promise<void> {
     try {
+      const apiKey = await this.getApiKey();
+      
       const response = await fetch(`${this.baseUrl}/webhooks/${webhookId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`
+          'Authorization': `Bearer ${apiKey}`
         }
       });
 
@@ -278,7 +336,12 @@ export class HeliusService {
   ): Promise<void> {
     // Implementation depends on your job storage mechanism
     // This is a placeholder that should be implemented based on your needs
-    console.log('Updating job metadata:', { jobId, metadata });
+    AppLogger.info('Updating job metadata', {
+      component: 'HeliusService',
+      action: 'updateJobMetadata',
+      jobId,
+      metadata: JSON.stringify(metadata)
+    });
   }
 
   /**
@@ -387,6 +450,354 @@ export class HeliusService {
           tx
         ]
       );
+    }
+  }
+
+  public async handleWebhookData(
+    jobId: string,
+    userId: string,
+    data: HeliusWebhookData[]
+  ): Promise<HeliusProcessingResult> {
+    try {
+      AppLogger.info('Processing webhook data', {
+        component: 'HeliusService',
+        action: 'handleWebhookData',
+        jobId,
+        userId,
+        dataCount: data.length
+      });
+
+      let transactionsProcessed = 0;
+      const errors: Array<{ signature: string; error: string }> = [];
+
+      for (const transaction of data) {
+        try {
+          // Validate transaction data
+          if (!transaction.signature || !transaction.timestamp) {
+            throw new Error('Invalid transaction data: missing required fields');
+          }
+
+          // Process based on transaction type
+          switch (transaction.type) {
+            case 'NFT_SALE':
+              await this.processNFTTransaction(transaction, userId);
+              break;
+            case 'TOKEN_TRANSFER':
+              await this.processTokenTransfer(transaction, userId);
+              break;
+            case 'PROGRAM_INTERACTION':
+              await this.processProgramInteraction(transaction, userId);
+              break;
+            case 'LENDING_PROTOCOL':
+              await this.processLendingProtocol(transaction, userId);
+              break;
+            default:
+              await this.processGenericTransaction(transaction, userId);
+          }
+
+          transactionsProcessed++;
+        } catch (error) {
+          AppLogger.error('Failed to process transaction', error as Error, {
+            component: 'HeliusService',
+            action: 'handleWebhookData',
+            jobId,
+            signature: transaction.signature
+          });
+
+          errors.push({
+            signature: transaction.signature,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      }
+
+      // Log processing stats
+      AppLogger.info('Webhook data processing completed', {
+        component: 'HeliusService',
+        action: 'handleWebhookData',
+        jobId,
+        transactionsProcessed,
+        errorCount: errors.length
+      });
+
+      return {
+        success: errors.length === 0,
+        transactionsProcessed,
+        errors: errors.length > 0 ? errors : undefined
+      };
+    } catch (error) {
+      AppLogger.error('Failed to handle webhook data', error as Error, {
+        component: 'HeliusService',
+        action: 'handleWebhookData',
+        jobId,
+        userId
+      });
+      throw error;
+    }
+  }
+
+  private async processNFTTransaction(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      // Process NFT events
+      const nftEvents = transaction.events.filter(event => 
+        event.type === 'NFT_SALE' || 
+        event.type === 'NFT_LISTING' || 
+        event.type === 'NFT_GLOBAL_LISTING' ||
+        event.type === 'NFT_CANCEL_LISTING' ||
+        event.type === 'BID_PLACED' ||
+        event.type === 'BID_CANCELLED' ||
+        event.type === 'BID_ACCEPTED'
+      );
+
+      if (!nftEvents.length) {
+        return;
+      }
+
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Process NFT bids
+        const bidService = NFTBidService.getInstance();
+        await bidService.processBidEvent(transaction, client);
+
+        // Process NFT prices
+        const priceService = NFTPriceService.getInstance();
+        await priceService.processPriceEvent(transaction, client);
+
+        // Process other NFT events
+        for (const event of nftEvents) {
+          const eventData = event.data as Record<string, any>;
+          await client.query(
+            `INSERT INTO nft_events (
+              signature,
+              mint_address,
+              event_type,
+              price,
+              buyer,
+              seller,
+              timestamp,
+              raw_data
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (signature) DO NOTHING`,
+            [
+              transaction.signature,
+              eventData.mint || eventData.mintAddress,
+              event.type,
+              eventData.amount || eventData.price || 0,
+              eventData.buyer || eventData.newOwner,
+              eventData.seller || eventData.owner,
+              new Date(transaction.timestamp),
+              event
+            ]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      AppLogger.error('Failed to process NFT transaction', error as Error, {
+        component: 'HeliusService',
+        action: 'processNFTTransaction',
+        signature: transaction.signature
+      });
+      throw error;
+    }
+  }
+
+  private async processTokenTransfer(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      if (!transaction.nativeTransfers?.length) {
+        throw new Error('No token transfers found in transaction');
+      }
+
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Process native SOL transfers
+        for (const transfer of transaction.nativeTransfers) {
+          await client.query(
+            `INSERT INTO token_transfers (
+              signature,
+              token_address,
+              from_address,
+              to_address,
+              amount,
+              timestamp,
+              raw_data
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (signature, token_address) DO NOTHING`,
+            [
+              transaction.signature,
+              'SOL', // Native SOL transfers
+              transfer.fromUserAccount,
+              transfer.toUserAccount,
+              transfer.amount / 1e9, // Convert lamports to SOL
+              new Date(transaction.timestamp),
+              transfer
+            ]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      AppLogger.error('Failed to process token transfer', error as Error, {
+        component: 'HeliusService',
+        action: 'processTokenTransfer',
+        signature: transaction.signature
+      });
+      throw error;
+    }
+  }
+
+  private async processProgramInteraction(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      if (!transaction.accountData?.length) {
+        throw new Error('No program interactions found in transaction');
+      }
+
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        for (const interaction of transaction.accountData) {
+          await client.query(
+            `INSERT INTO program_interactions (
+              signature,
+              program_id,
+              instruction_data,
+              timestamp,
+              raw_data
+            ) VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (signature, program_id) DO NOTHING`,
+            [
+              transaction.signature,
+              interaction.program,
+              interaction.data,
+              new Date(transaction.timestamp),
+              interaction
+            ]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      AppLogger.error('Failed to process program interaction', error as Error, {
+        component: 'HeliusService',
+        action: 'processProgramInteraction',
+        signature: transaction.signature
+      });
+      throw error;
+    }
+  }
+
+  private async processLendingProtocol(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Process lending protocol events
+        const lendingService = LendingService.getInstance();
+        await lendingService.processLendingEvent(transaction, client);
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      AppLogger.error('Failed to process lending protocol transaction', error as Error, {
+        component: 'HeliusService',
+        action: 'processLendingProtocol',
+        signature: transaction.signature
+      });
+      throw error;
+    }
+  }
+
+  private async processGenericTransaction(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Store the basic transaction data
+        await client.query(
+          `INSERT INTO transactions (
+            signature,
+            slot,
+            timestamp,
+            success,
+            fee,
+            program_ids,
+            raw_data
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (signature) DO NOTHING`,
+          [
+            transaction.signature,
+            transaction.slot,
+            new Date(transaction.timestamp),
+            transaction.status === 'success',
+            transaction.fee,
+            transaction.accountData.map(acc => acc.program),
+            transaction
+          ]
+        );
+
+        // Process token prices if this is a DEX/aggregator transaction
+        const tokenPriceService = TokenPriceService.getInstance();
+        await tokenPriceService.processPriceEvent(transaction, client);
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      AppLogger.error('Failed to process generic transaction', error as Error, {
+        component: 'HeliusService',
+        action: 'processGenericTransaction',
+        signature: transaction.signature
+      });
+      throw error;
     }
   }
 } 

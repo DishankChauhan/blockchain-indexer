@@ -1,42 +1,42 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import JobService from '@/lib/services/jobService';
+import { JobService } from '@/lib/services/jobService';
 import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+
+const jobService = JobService.getInstance();
 
 export async function GET(
-  req: Request,
+  request: Request,
   { params }: { params: { jobId: string } }
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    if (!session) {
+      throw new AppError('Unauthorized');
     }
 
-    const jobService = JobService.getInstance();
-    const status = await jobService.getJobStatus(
-      params.jobId,
-      session.user.email as string
-    );
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
+    }
 
-    return NextResponse.json(status);
+    const { jobId } = params;
+    const status = await jobService.getJobStatus(jobId, userId);
+
+    return NextResponse.json({ status });
   } catch (error) {
-    console.error('Job status error:', error);
+    AppLogger.error('Failed to get job status', error as Error, {
+      component: 'JobStatusAPI',
+      action: 'GET',
+      path: `/api/jobs/${params.jobId}/status`,
+      jobId: params.jobId
+    });
 
     if (error instanceof AppError) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: error.statusCode }
-      );
+      return NextResponse.json({ error: error.message }, { status: 401 });
     }
-
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

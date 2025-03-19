@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import JobService from '@/lib/services/jobService';
+import { JobService } from '@/lib/services/jobService';
+import { AppError } from '@/lib/utils/errorHandling';
+import AppLogger from '@/lib/utils/logger';
+
+const jobService = JobService.getInstance();
 
 export async function POST(
   request: Request,
@@ -9,32 +13,37 @@ export async function POST(
 ) {
   try {
     const session = await getServerSession(authOptions);
-    console.log('Session:', session); // Debug log
-
     if (!session) {
-      console.log('No session found');
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+      throw new AppError('Unauthorized');
     }
 
-    if (!session.user) {
-      console.log('No user in session');
-      return NextResponse.json({ error: 'No user found' }, { status: 401 });
+    const userId = session.user?.id;
+    if (!userId) {
+      throw new AppError('User ID not found in session');
     }
 
-    if (!session.user.id) {
-      console.log('No user ID in session');
-      return NextResponse.json({ error: 'No user ID found' }, { status: 401 });
-    }
+    const { jobId } = params;
+    const job = await jobService.cancelJob(jobId, userId);
 
-    const jobService = JobService.getInstance();
-    const job = await jobService.cancelJob(params.jobId, session.user.id);
+    AppLogger.info('Job stopped successfully', {
+      component: 'JobStopAPI',
+      action: 'POST',
+      jobId,
+      userId
+    });
 
     return NextResponse.json(job);
   } catch (error) {
-    console.error('Failed to stop job:', error);
-    return NextResponse.json(
-      { error: 'Failed to stop job' },
-      { status: 500 }
-    );
+    AppLogger.error('Failed to stop job', error as Error, {
+      component: 'JobStopAPI',
+      action: 'POST',
+      path: `/api/jobs/${params.jobId}/stop`,
+      jobId: params.jobId
+    });
+
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: 401 });
+    }
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

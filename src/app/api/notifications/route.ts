@@ -2,12 +2,18 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import AppLogger from '@/lib/utils/logger';
 
-export async function GET() {
+export async function GET(request: Request) {
+  let session;
   try {
-    const session = await getServerSession(authOptions);
+    session = await getServerSession(authOptions);
     
     if (!session?.user?.email) {
+      AppLogger.warn('Unauthorized access attempt to notifications', {
+        path: '/api/notifications',
+        method: 'GET',
+      });
       return new NextResponse('Unauthorized', { status: 401 });
     }
 
@@ -16,6 +22,11 @@ export async function GET() {
     });
 
     if (!user) {
+      AppLogger.warn('User not found for notifications request', {
+        path: '/api/notifications',
+        method: 'GET',
+        email: session.user.email,
+      });
       return new NextResponse('User not found', { status: 404 });
     }
 
@@ -27,7 +38,12 @@ export async function GET() {
 
     return NextResponse.json(notifications);
   } catch (error) {
-    console.error('Notifications API Error:', error);
+    AppLogger.error('Failed to fetch notifications', error as Error, {
+      path: '/api/notifications',
+      method: 'GET',
+      userId: session?.user?.email || undefined,
+      statusCode: 500,
+    });
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

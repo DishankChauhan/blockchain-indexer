@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/select';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { LineChart, BarChart } from '@/components/Charts';
+import { useToast } from '@/components/ui/Toast';
+import AppLogger from '@/lib/utils/logger';
 
 export default function AnalyticsDashboard() {
   const { data: session } = useSession();
@@ -30,6 +32,7 @@ export default function AnalyticsDashboard() {
     tokens?: TokenMetrics;
     trends?: any;
   }>({});
+  const { toast } = useToast();
 
   useEffect(() => {
     if (session?.user?.id) {
@@ -73,8 +76,16 @@ export default function AnalyticsDashboard() {
 
       setMetrics({ transactions, nft, tokens, trends });
     } catch (error) {
-      console.error('Failed to load metrics:', error);
-      // TODO: Add proper error handling/notification
+      AppLogger.error('Failed to load analytics metrics', error as Error, {
+        userId: session.user.id,
+        timeRange,
+      });
+      
+      toast({
+        title: 'Error',
+        description: 'Failed to load analytics data. Please try again later.',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
@@ -82,6 +93,14 @@ export default function AnalyticsDashboard() {
 
   if (loading) {
     return <LoadingSpinner />;
+  }
+
+  if (!metrics) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-gray-500">No analytics data available</p>
+      </div>
+    );
   }
 
   return (

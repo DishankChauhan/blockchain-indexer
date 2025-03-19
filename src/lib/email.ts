@@ -1,4 +1,5 @@
 import sgMail from '@sendgrid/mail';
+import AppLogger from './utils/logger';
 
 interface EmailOptions {
   to: string;
@@ -15,7 +16,12 @@ if (isEmailConfigured) {
 
 export async function sendEmail(options: EmailOptions): Promise<boolean> {
   if (!isEmailConfigured) {
-    console.warn('SendGrid API key not configured. Skipping email notification.');
+    AppLogger.warn('SendGrid API key not configured', {
+      component: 'EmailService',
+      action: 'SendEmail',
+      skipped: true,
+      recipient: options.to
+    });
     return false;
   }
 
@@ -24,9 +30,22 @@ export async function sendEmail(options: EmailOptions): Promise<boolean> {
       ...options,
       from: process.env.EMAIL_FROM || 'noreply@blockchainindexer.com',
     });
+    
+    AppLogger.info('Email sent successfully', {
+      component: 'EmailService',
+      action: 'SendEmail',
+      recipient: options.to,
+      subject: options.subject
+    });
+    
     return true;
   } catch (error) {
-    console.error('Failed to send email:', error);
+    AppLogger.error('Failed to send email', error as Error, {
+      component: 'EmailService',
+      action: 'SendEmail',
+      recipient: options.to,
+      subject: options.subject
+    });
     return false;
   }
 } 
