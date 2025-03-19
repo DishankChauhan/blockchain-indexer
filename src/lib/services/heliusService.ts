@@ -46,6 +46,9 @@ export class HeliusService {
   private baseUrl: string;
 
   private constructor(userId: string) {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
     this.dbService = DatabaseService.getInstance();
     this.userId = userId;
     this.jobService = JobService.getInstance();
@@ -60,6 +63,29 @@ export class HeliusService {
       HeliusService.instance = new HeliusService(userId);
     }
     return HeliusService.instance;
+  }
+
+  /**
+   * Cleans up resources and connections
+   */
+  public async cleanup(): Promise<void> {
+    try {
+      // Reset the singleton instance
+      HeliusService.instance = undefined as any;
+      
+      // Clean up any open database connections
+      await this.dbService.cleanup();
+      
+      // Clean up any open resources in other services
+      await this.jobService.cleanup();
+    } catch (error) {
+      AppLogger.error('Failed to cleanup HeliusService', error as Error, {
+        component: 'HeliusService',
+        action: 'cleanup',
+        userId: this.userId
+      });
+      // Don't throw the error as this is cleanup code
+    }
   }
 
   private async getApiKey(): Promise<string> {
@@ -123,41 +149,49 @@ export class HeliusService {
         throw new HeliusError('Invalid webhook URL. Must be a valid HTTP(S) URL');
       }
 
-      // Get API key
-      const apiKey = await this.getApiKey();
-
-      // Prepare request body
-      const webhookRequest: HeliusWebhookRequest = {
-        accountAddresses,
-        programIds,
-        webhookURL,
-        webhookType: 'enhanced',
-        authHeader: webhookSecret,
-        txnType: ['any'],
-      };
-
-      // Make API request
-      const response = await fetch(`${this.baseUrl}/webhooks`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify(webhookRequest)
-      });
-
-      // Handle error responses
-      if (!response.ok) {
-        const errorData = await response.json() as HeliusErrorResponse;
-        throw new HeliusError(
-          `Webhook creation failed: ${errorData.message || response.statusText}`,
-          { status: response.status, error: errorData }
-        );
+      // Check rate limit
+      if (!(await this.rateLimiter.waitForToken('helius'))) {
+        throw new AppError('Rate limit exceeded');
       }
 
-      // Parse successful response
-      const data = await response.json() as HeliusWebhookResponse;
-      return { webhookId: data.webhookId };
+      // Use circuit breaker for retries
+      return await this.circuitBreaker.executeWithRetry('helius', async () => {
+        // Get API key
+        const apiKey = await this.getApiKey();
+
+        // Prepare request body
+        const webhookRequest: HeliusWebhookRequest = {
+          accountAddresses,
+          programIds,
+          webhookURL,
+          webhookType: 'enhanced',
+          authHeader: webhookSecret,
+          txnType: ['any'],
+        };
+
+        // Make API request
+        const response = await fetch(`${this.baseUrl}/webhooks`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify(webhookRequest)
+        });
+
+        // Handle error responses
+        if (!response.ok) {
+          const errorData = await response.json() as HeliusErrorResponse;
+          throw new HeliusError(
+            `Webhook creation failed: ${errorData.message || response.statusText}`,
+            { status: response.status, error: errorData }
+          );
+        }
+
+        // Parse successful response
+        const data = await response.json() as HeliusWebhookResponse;
+        return { webhookId: data.webhookId };
+      });
     } catch (error) {
       if (error instanceof HeliusError) {
         throw error;

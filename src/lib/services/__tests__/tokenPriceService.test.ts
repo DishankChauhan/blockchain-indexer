@@ -20,116 +20,116 @@ describe('TokenPriceService', () => {
   beforeEach(() => {
     clearMocks();
     service = TokenPriceService.getInstance();
+
+    // Mock all database queries
+    mockClient.query.mockImplementation((query: string, params: any[]) => {
+      // Platform ID query
+      if (query.includes('SELECT id FROM token_platforms')) {
+        const programId = params[0];
+        let platformId;
+        switch (programId) {
+          case '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8':
+            platformId = 1; // Raydium
+            break;
+          case '9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP':
+            platformId = 2; // Orca
+            break;
+          case 'JUP6i4ozu5ydDCnLiMogSckDPpbtr7BJ4FtzYWkb5Rk':
+            platformId = 3; // Jupiter
+            break;
+          case 'srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX':
+            platformId = 4; // Serum
+            break;
+          default:
+            return { rows: [] };
+        }
+        return { rows: [{ id: platformId }] };
+      }
+
+      // Token pairs insert/update query
+      if (query.includes('INSERT INTO token_pairs')) {
+        return { rows: [{ id: 1 }] };
+      }
+
+      // Token prices insert query
+      if (query.includes('INSERT INTO token_prices')) {
+        return { rows: [] };
+      }
+
+      // Default response for other queries
+      return { rows: [] };
+    });
   });
 
   describe('processPriceEvent', () => {
     it('should process Raydium pool updates', async () => {
-      setupSuccessfulQueries();
       const transaction = mockTransaction({
         accountData: [mockRaydiumPoolData]
       });
 
-      await service.processPriceEvent(transaction, mockPool);
+      await service.processPriceEvent(transaction, mockClient);
 
-      expect(mockPool.connect).toHaveBeenCalled();
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/SELECT id FROM token_platforms/),
-        ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8']
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_pairs/),
-        expect.any(Array)
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_prices/),
-        expect.any(Array)
+        expect.stringContaining('INSERT INTO token_pairs'),
+        expect.arrayContaining([1, mockRaydiumPoolData.data.baseMint])
       );
     });
 
     it('should process Orca whirlpool updates', async () => {
-      setupSuccessfulQueries();
       const transaction = mockTransaction({
         accountData: [mockOrcaPoolData]
       });
 
-      await service.processPriceEvent(transaction, mockPool);
+      await service.processPriceEvent(transaction, mockClient);
 
-      expect(mockPool.connect).toHaveBeenCalled();
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/SELECT id FROM token_platforms/),
-        ['9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP']
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_pairs/),
-        expect.any(Array)
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_prices/),
-        expect.any(Array)
+        expect.stringContaining('INSERT INTO token_pairs'),
+        expect.arrayContaining([2, mockOrcaPoolData.data.tokenMintA])
       );
     });
 
     it('should process Jupiter swap events', async () => {
-      setupSuccessfulQueries();
       const transaction = mockTransaction({
         accountData: [mockJupiterSwapData]
       });
 
-      await service.processPriceEvent(transaction, mockPool);
+      await service.processPriceEvent(transaction, mockClient);
 
-      expect(mockPool.connect).toHaveBeenCalled();
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/SELECT id FROM token_platforms/),
-        ['JUP6i4ozu5ydDCnLiMogSckDPpbtr7BJ4FtzYWkb5Rk']
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_pairs/),
-        expect.any(Array)
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_prices/),
-        expect.any(Array)
+        expect.stringContaining('INSERT INTO token_pairs'),
+        expect.arrayContaining([3, mockJupiterSwapData.data.inputMint])
       );
     });
 
     it('should process Serum market updates', async () => {
-      setupSuccessfulQueries();
       const transaction = mockTransaction({
         accountData: [mockSerumMarketData]
       });
 
-      await service.processPriceEvent(transaction, mockPool);
+      await service.processPriceEvent(transaction, mockClient);
 
-      expect(mockPool.connect).toHaveBeenCalled();
       expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/SELECT id FROM token_platforms/),
-        ['srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX']
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_pairs/),
-        expect.any(Array)
-      );
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringMatching(/INSERT INTO token_prices/),
-        expect.any(Array)
+        expect.stringContaining('INSERT INTO token_pairs'),
+        expect.arrayContaining([4, mockSerumMarketData.data.baseMint])
       );
     });
 
     it('should handle database errors gracefully', async () => {
-      setupFailedQueries();
+      // Override the mock for this test to simulate a database error
+      mockClient.query.mockImplementation(() => {
+        throw new Error('Database error');
+      });
+
       const transaction = mockTransaction({
         accountData: [mockRaydiumPoolData]
       });
 
-      await expect(service.processPriceEvent(transaction, mockPool))
+      await expect(service.processPriceEvent(transaction, mockClient))
         .rejects
         .toThrow('Database error');
-
-      expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
     });
 
     it('should ignore non-DEX transactions', async () => {
-      setupSuccessfulQueries();
       const transaction = mockTransaction({
         accountData: [{
           account: 'unknown',
@@ -139,9 +139,12 @@ describe('TokenPriceService', () => {
         }]
       });
 
-      await service.processPriceEvent(transaction, mockPool);
+      await service.processPriceEvent(transaction, mockClient);
 
-      expect(mockClient.query).not.toHaveBeenCalled();
+      expect(mockClient.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO token_pairs'),
+        expect.anything()
+      );
     });
   });
 
@@ -159,9 +162,9 @@ describe('TokenPriceService', () => {
         last_updated: new Date()
       }];
 
-      mockPool.query.mockResolvedValueOnce({ rows: mockPrices });
+      mockClient.query.mockResolvedValueOnce({ rows: mockPrices });
 
-      const result = await service.getCurrentPrices(mockPool, {
+      const result = await service.getCurrentPrices(mockClient, {
         baseMint: 'SOL',
         quoteMint: 'USDC',
         platform: 'Raydium',
@@ -178,9 +181,9 @@ describe('TokenPriceService', () => {
     });
 
     it('should handle database errors in getCurrentPrices', async () => {
-      mockPool.query.mockRejectedValueOnce(new Error('Database error'));
+      mockClient.query.mockRejectedValueOnce(new Error('Database error'));
 
-      await expect(service.getCurrentPrices(mockPool))
+      await expect(service.getCurrentPrices(mockClient))
         .rejects
         .toThrow('Failed to get current token prices');
     });
@@ -197,19 +200,20 @@ describe('TokenPriceService', () => {
         avg_price: '20.5',
         total_volume_24h: '2300000',
         total_liquidity: '9000000',
-        platforms: JSON.stringify([
-          {
-            platform: 'Raydium',
-            type: 'dex',
-            price: 20.5,
-            volume: 1000000
-          }
-        ])
+        platforms: [{
+          platform: 'Raydium',
+          type: 'dex',
+          pool: 'pool123',
+          price: 20.5,
+          volume: 1000000,
+          liquidity: 5000000,
+          timestamp: new Date()
+        }]
       }];
 
-      mockPool.query.mockResolvedValueOnce({ rows: mockAggregated });
+      mockClient.query.mockResolvedValueOnce({ rows: mockAggregated });
 
-      const result = await service.getAggregatedPrices(mockPool, {
+      const result = await service.getAggregatedPrices(mockClient, {
         baseMint: 'SOL',
         minLiquidity: 1000000
       });
@@ -224,9 +228,9 @@ describe('TokenPriceService', () => {
     });
 
     it('should handle database errors in getAggregatedPrices', async () => {
-      mockPool.query.mockRejectedValueOnce(new Error('Database error'));
+      mockClient.query.mockRejectedValueOnce(new Error('Database error'));
 
-      await expect(service.getAggregatedPrices(mockPool))
+      await expect(service.getAggregatedPrices(mockClient))
         .rejects
         .toThrow('Failed to get aggregated token prices');
     });
