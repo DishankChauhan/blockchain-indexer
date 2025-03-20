@@ -3,7 +3,10 @@ import {
   NotificationOptions, 
   NotificationResponse 
 } from '@/types/notification';
-import AppLogger from '@/lib/utils/logger';
+import { PrismaClient, Notification } from '@prisma/client';
+import { AppError } from '@/lib/utils/errorHandling';
+import { logError } from '@/lib/utils/serverLogger';
+import { EmailService } from './emailService';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 5000, 15000]; // Exponential backoff in milliseconds
@@ -99,7 +102,7 @@ async function sendNotificationWithRetry(
     }
 
     // Handle unexpected errors
-    AppLogger.error('Unexpected notification error', error as Error, {
+    logError('Unexpected notification error', error as Error, {
       component: 'NotificationService',
       action: 'handleNotification',
       notificationType: type,
@@ -147,7 +150,7 @@ export async function sendNotification(
     return await sendNotificationWithRetry(message, type, defaultOptions);
   } catch (error) {
     // Log error for monitoring
-    AppLogger.error('Notification service error', error as Error, {
+    logError('Notification service error', error as Error, {
       component: 'NotificationService',
       action: 'sendNotification',
       notificationType: type,
@@ -166,5 +169,95 @@ export async function sendNotification(
       'NOTIFICATION_FAILED',
       false
     );
+  }
+}
+
+export class NotificationService {
+  private static instance: NotificationService | null = null;
+  private readonly prisma: PrismaClient;
+  private readonly emailService: EmailService;
+
+  private constructor() {
+    this.prisma = new PrismaClient();
+    this.emailService = EmailService.getInstance();
+  }
+
+  public static getInstance(): NotificationService {
+    if (!NotificationService.instance) {
+      NotificationService.instance = new NotificationService();
+    }
+    return NotificationService.instance;
+  }
+
+  public async createNotification(
+    userId: string,
+    type: string,
+    message: string,
+    metadata: Record<string, any> = {}
+  ): Promise<Notification> {
+    try {
+      const notification = await this.prisma.notification.create({
+        data: {
+          userId,
+          type,
+          message,
+          metadata,
+          status: 'unread'
+        }
+      });
+
+      // Send email notification if enabled
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true, emailNotifications: true }
+      });
+
+      if (user?.emailNotifications) {
+        await this.emailService.sendEmail({
+          to: user.email,
+          subject: `New Notification: ${type}`,
+          text: message,
+          html: `<p>${message}</p>`
+        });
+      }
+
+      return notification;
+    } catch (error) {
+      logError('Unexpected notification error', error as Error, {
+        component: 'NotificationService',
+        action: 'createNotification',
+        userId,
+        type
+      });
+      throw new AppError('Failed to create notification');
+    }
+  }
+
+  public async markAsRead(userId: string, notificationId: string): Promise<void> {
+    try {
+      await this.prisma.notification.updateMany({
+        where: {
+          id: notificationId,
+          userId
+        },
+        data: {
+          status: 'read',
+          readAt: new Date()
+        }
+      });
+    } catch (error) {
+      logError('Notification service error', error as Error, {
+        component: 'NotificationService',
+        action: 'markAsRead',
+        userId,
+        notificationId
+      });
+      throw new AppError('Failed to mark notification as read');
+    }
+  }
+
+  public async cleanup(): Promise<void> {
+    await this.prisma.$disconnect();
+    NotificationService.instance = null;
   }
 } 

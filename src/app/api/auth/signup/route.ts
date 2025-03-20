@@ -1,18 +1,15 @@
 import { NextResponse } from 'next/server';
-import { hash } from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import bcrypt from 'bcryptjs';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/prisma';
 
-const prisma = new PrismaClient();
-
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const body = await request.json();
-    const { name, email, password } = body;
+    const body = await req.json();
+    const { email, password, name } = body;
 
-    if (!name || !email || !password) {
-      throw new AppError('Missing required fields');
+    if (!email || !password) {
+      return new NextResponse('Missing required fields', { status: 400 });
     }
 
     // Check if user already exists
@@ -21,41 +18,40 @@ export async function POST(request: Request) {
     });
 
     if (existingUser) {
-      throw new AppError('User already exists');
+      return new NextResponse('User already exists', { status: 409 });
     }
 
     // Hash password
-    const hashedPassword = await hash(password, 12);
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user
     const user = await prisma.user.create({
       data: {
-        name,
         email,
-        password: hashedPassword
+        password: hashedPassword,
+        name: name || null
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true
       }
     });
 
-    AppLogger.info('User created successfully', {
+    logInfo('User created successfully', {
       component: 'SignupAPI',
       action: 'POST',
-      userId: user.id,
-      email: user.email
+      userId: user.id
     });
 
-    const { password: _, ...userWithoutPassword } = user;
-    return NextResponse.json(userWithoutPassword);
+    return NextResponse.json({ data: user });
   } catch (error) {
-    AppLogger.error('Failed to create user', error as Error, {
+    logError('Failed to create user', error as Error, {
       component: 'SignupAPI',
-      action: 'POST',
-      path: '/api/auth/signup'
+      action: 'POST'
     });
-
-    if (error instanceof AppError) {
-      const statusCode = error.message.includes('already exists') ? 409 : 400;
-      return NextResponse.json({ error: error.message }, { status: statusCode });
-    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

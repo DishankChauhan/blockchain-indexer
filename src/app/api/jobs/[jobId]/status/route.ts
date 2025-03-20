@@ -1,42 +1,46 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { JobService } from '@/lib/services/jobService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import { logError } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/prisma';
 
-const jobService = JobService.getInstance();
+interface Props {
+  params: { jobId: string }
+}
 
-export async function GET(
-  request: Request,
-  { params }: { params: { jobId: string } }
-) {
+export async function GET(req: Request, { params }: Props) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
-    }
-
-    const { jobId } = params;
-    const status = await jobService.getJobStatus(jobId, userId);
-
-    return NextResponse.json({ status });
-  } catch (error) {
-    AppLogger.error('Failed to get job status', error as Error, {
-      component: 'JobStatusAPI',
-      action: 'GET',
-      path: `/api/jobs/${params.jobId}/status`,
-      jobId: params.jobId
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: params.jobId,
+        userId: session.user.id
+      },
+      select: {
+        id: true,
+        status: true,
+        progress: true,
+        lastRunAt: true,
+        updatedAt: true
+      }
     });
 
-    if (error instanceof AppError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
+    if (!job) {
+      return new NextResponse('Job not found', { status: 404 });
     }
+
+    return NextResponse.json({ data: job });
+  } catch (error) {
+    logError('Failed to get job status', error as Error, {
+      component: 'JobStatusAPI',
+      action: 'GET',
+      jobId: params.jobId
+    });
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

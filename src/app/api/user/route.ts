@@ -1,52 +1,47 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-import { PrismaClient } from '@prisma/client';
+import { logError } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/prisma';
 
-const prisma = new PrismaClient();
-
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
-    }
-
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: session.user.id },
       select: {
         id: true,
-        name: true,
         email: true,
+        name: true,
         createdAt: true,
-        updatedAt: true
+        updatedAt: true,
+        notifications: {
+          where: { status: 'unread' },
+          select: {
+            id: true,
+            type: true,
+            message: true,
+            createdAt: true
+          }
+        }
       }
     });
 
     if (!user) {
-      throw new AppError('User not found');
+      return new NextResponse('User not found', { status: 404 });
     }
 
-    return NextResponse.json(user);
+    return NextResponse.json({ data: user });
   } catch (error) {
-    AppLogger.error('Failed to get user data', error as Error, {
+    logError('Failed to get user data', error as Error, {
       component: 'UserAPI',
-      action: 'GET',
-      path: '/api/user'
+      action: 'GET'
     });
-
-    if (error instanceof AppError) {
-      const statusCode = error.message.includes('not found') ? 404 :
-                        error.message.includes('Unauthorized') ? 403 : 401;
-      return NextResponse.json({ error: error.message }, { status: statusCode });
-    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

@@ -32,19 +32,24 @@ export interface ErrorLogContext {
   [key: string]: any;
 }
 
-const ServerLogger = {
-  error: (message: string, error: Error, context?: ErrorLogContext) => {
-    logger.error(message, { error: { message: error.message, stack: error.stack }, ...context });
-  },
-  warn: (message: string, context?: Record<string, any>) => {
-    logger.warn(message, context);
-  },
-  info: (message: string, context?: Record<string, any>) => {
-    logger.info(message, context);
-  },
-  debug: (message: string, context?: Record<string, any>) => {
-    logger.debug(message, context);
-  }
-};
+interface SerializableError {
+  message: string;
+  name: string;
+  stack?: string;
+}
 
-export default ServerLogger; 
+export async function logError(message: string, error: SerializableError, context?: ErrorLogContext) {
+  logger.error(message, { error, ...context });
+}
+
+export async function logWarn(message: string, context?: Record<string, any>) {
+  logger.warn(message, context);
+}
+
+export async function logInfo(message: string, context?: Record<string, any>) {
+  logger.info(message, context);
+}
+
+export async function logDebug(message: string, context?: Record<string, any>) {
+  logger.debug(message, context);
+} 

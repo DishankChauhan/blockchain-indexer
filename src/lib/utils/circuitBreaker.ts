@@ -1,4 +1,4 @@
-import AppLogger from './logger';
+import { logError, logInfo, logWarn } from './serverLogger';
 import { AppError } from './errorHandling';
 
 interface CircuitBreakerConfig {
@@ -86,7 +86,7 @@ export class CircuitBreaker {
 
     if (this.getState(service) === 'HALF_OPEN') {
       this.circuits.set(service, 'CLOSED');
-      AppLogger.info('Circuit closed after successful recovery', {
+      logInfo('Circuit closed after successful recovery', {
         component: 'CircuitBreaker',
         action: 'recordSuccess',
         service
@@ -104,7 +104,7 @@ export class CircuitBreaker {
 
     if (config && stats.failures >= config.failureThreshold) {
       this.circuits.set(service, 'OPEN');
-      AppLogger.warn('Circuit opened due to failures', {
+      logWarn('Circuit opened due to failures', {
         component: 'CircuitBreaker',
         action: 'recordFailure',
         service,
@@ -138,7 +138,7 @@ export class CircuitBreaker {
         lastError = error as Error;
         this.recordFailure(service);
 
-        AppLogger.warn('Operation failed, retrying', {
+        logWarn('Operation failed, retrying', {
           component: 'CircuitBreaker',
           action: 'executeWithRetry',
           service,

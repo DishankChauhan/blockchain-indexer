@@ -1,5 +1,5 @@
 import sgMail from '@sendgrid/mail';
-import AppLogger from '@/lib/utils/logger';
+import { logError } from '@/lib/utils/serverLogger';
 import { AppError } from '@/lib/utils/errorHandling';
 
 // Initialize SendGrid with API key
@@ -38,7 +38,7 @@ export class EmailService {
       });
       return true;
     } catch (error) {
-      AppLogger.error('Failed to send email', error as Error, {
+      logError('Failed to send email', error as Error, {
         component: 'EmailService',
         action: 'sendEmail',
         to: options.to,
@@ -57,7 +57,7 @@ export class EmailService {
       // Reset singleton instance
       EmailService.instance = null;
     } catch (error) {
-      AppLogger.error('Failed to cleanup EmailService', error as Error, {
+      logError('Failed to cleanup EmailService', error as Error, {
         component: 'EmailService',
         action: 'cleanup'
       });

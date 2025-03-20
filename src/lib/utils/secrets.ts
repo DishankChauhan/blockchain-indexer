@@ -1,5 +1,5 @@
 import { AppError } from './errorHandling';
-import AppLogger from './logger';
+import { logError, logInfo, logWarn } from './serverLogger';
 import crypto from 'crypto';
 
 interface EncryptedSecret {
@@ -54,17 +54,15 @@ export class SecretsManager {
       this.secrets.set(key, JSON.stringify(encrypted));
       this.rotationSchedule.set(key, Date.now() + (rotationPeriodDays * 24 * 60 * 60 * 1000));
 
-      AppLogger.info('Secret stored successfully', {
-        component: 'SecretsManager',
-        action: 'setSecret',
-        key,
-        rotationDue: new Date(this.rotationSchedule.get(key) || 0).toISOString()
+      logInfo('Secret stored successfully', {
+        message: `Secret stored successfully for key ${key}. Rotation due: ${new Date(this.rotationSchedule.get(key) || 0).toISOString()}`
       });
     } catch (error) {
-      AppLogger.error('Failed to store secret', error as Error, {
-        component: 'SecretsManager',
-        action: 'setSecret',
-        key
+      const err = error as Error;
+      logError('Failed to store secret', {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
       });
       throw new AppError('Failed to store secret');
     }
@@ -83,20 +81,18 @@ export class SecretsManager {
       // Check if rotation is needed
       const rotationDue = this.rotationSchedule.get(key);
       if (rotationDue && Date.now() > rotationDue) {
-        AppLogger.warn('Secret rotation needed', {
-          component: 'SecretsManager',
-          action: 'getSecret',
-          key,
-          rotationDue: new Date(rotationDue).toISOString()
+        logWarn('Secret rotation needed', {
+          message: `Secret rotation needed for key ${key}. Due date: ${new Date(rotationDue).toISOString()}`
         });
       }
 
       return decrypted;
     } catch (error) {
-      AppLogger.error('Failed to retrieve secret', error as Error, {
-        component: 'SecretsManager',
-        action: 'getSecret',
-        key
+      const err = error as Error;
+      logError('Failed to retrieve secret', {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
       });
       throw new AppError('Failed to retrieve secret');
     }
@@ -105,17 +101,15 @@ export class SecretsManager {
   public async rotateSecret(key: string, newValue: string, rotationPeriodDays: number = 30): Promise<void> {
     try {
       await this.setSecret(key, newValue, rotationPeriodDays);
-      AppLogger.info('Secret rotated successfully', {
-        component: 'SecretsManager',
-        action: 'rotateSecret',
-        key,
-        nextRotationDue: new Date(this.rotationSchedule.get(key) || 0).toISOString()
+      logInfo('Secret rotated successfully', {
+        message: `Secret rotated successfully for key ${key}. Next rotation due: ${new Date(this.rotationSchedule.get(key) || 0).toISOString()}`
       });
     } catch (error) {
-      AppLogger.error('Failed to rotate secret', error as Error, {
-        component: 'SecretsManager',
-        action: 'rotateSecret',
-        key
+      const err = error as Error;
+      logError('Failed to rotate secret', {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
       });
       throw new AppError('Failed to rotate secret');
     }

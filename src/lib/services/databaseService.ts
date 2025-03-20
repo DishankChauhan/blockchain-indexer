@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 import { AppError } from '@/lib/utils/errorHandling';
 import { DatabaseCredentials } from '@/types';
 import prisma from '@/lib/db';
-import AppLogger from '@/lib/utils/logger';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import { SecretsManager } from '@/lib/utils/secrets';
 
 export class DatabaseService {
   public async initializeTables(dbConnection: DatabaseCredentials, categories: { [key: string]: boolean }): Promise<void> {
@@ -446,7 +447,7 @@ export class DatabaseService {
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');
-        AppLogger.error('Failed to initialize tables', error as Error, {
+        logError('Failed to initialize tables', error as Error, {
           component: 'DatabaseService',
           action: 'initializeTables',
           categories: JSON.stringify(categories)
@@ -457,7 +458,7 @@ export class DatabaseService {
         await pool.end(); // Clean up the temporary pool
       }
     } catch (error) {
-      AppLogger.error('Failed to initialize tables', error as Error, {
+      logError('Failed to initialize tables', error as Error, {
         component: 'DatabaseService',
         action: 'initializeTables',
         categories: JSON.stringify(categories)
@@ -468,9 +469,11 @@ export class DatabaseService {
 
   private static instance: DatabaseService;
   private connectionPools: Map<string, Pool>;
+  private secretsManager: SecretsManager;
 
   private constructor() {
     this.connectionPools = new Map();
+    this.secretsManager = SecretsManager.getInstance();
   }
 
   public static getInstance(): DatabaseService {
@@ -551,6 +554,9 @@ export class DatabaseService {
       // Test connection first
       await this.testConnection(credentials);
 
+      // Encrypt password
+      const encryptedPassword = await this.encryptPassword(credentials.password);
+
       // Save to database
       await prisma.databaseConnection.create({
         data: {
@@ -559,7 +565,7 @@ export class DatabaseService {
           port: credentials.port,
           database: credentials.database,
           username: credentials.username,
-          password: credentials.password, // In production, encrypt this
+          password: encryptedPassword,
           status: 'active',
         },
       });
@@ -588,12 +594,15 @@ export class DatabaseService {
       // Check if we already have a pool
       let pool = this.connectionPools.get(connectionId);
       if (!pool) {
+        // Decrypt password
+        const decryptedPassword = await this.decryptPassword(connection.password);
+
         pool = await this.createPool({
           host: connection.host,
           port: connection.port,
           database: connection.database,
           username: connection.username,
-          password: connection.password,
+          password: decryptedPassword,
         });
         this.connectionPools.set(connectionId, pool);
       }
@@ -650,5 +659,15 @@ export class DatabaseService {
         'Failed to create database pool'
       );
     }
+  }
+
+  private async encryptPassword(password: string): Promise<string> {
+    const key = `db_password_${Date.now()}`;
+    await this.secretsManager.setSecret(key, password);
+    return key;
+  }
+
+  private async decryptPassword(key: string): Promise<string> {
+    return await this.secretsManager.getSecret(key);
   }
 } 

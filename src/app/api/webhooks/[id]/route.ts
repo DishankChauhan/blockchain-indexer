@@ -3,10 +3,10 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { WebhookService } from '@/lib/services/webhookService';
 import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/db';
 
-const webhookService = WebhookService.getInstance();
-
+// Initialize webhookService in each request handler to ensure we have the correct userId
 export async function GET(
   request: Request,
   { params }: { params: { id: string } }
@@ -22,6 +22,7 @@ export async function GET(
       throw new AppError('User ID not found in session');
     }
 
+    const webhookService = WebhookService.getInstance(userId);
     const { id } = params;
     const webhook = await webhookService.getWebhook(id);
 
@@ -35,8 +36,13 @@ export async function GET(
 
     return NextResponse.json(webhook);
   } catch (error) {
-    AppLogger.error('Failed to get webhook', error as Error, {
-      component: 'WebhookAPI',
+    const err = error as Error;
+    logError('Failed to get webhook', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack
+    }, {
+      service: 'WebhookAPI',
       action: 'GET',
       path: `/api/webhooks/${params.id}`,
       webhookId: params.id
@@ -66,6 +72,7 @@ export async function PUT(
       throw new AppError('User ID not found in session');
     }
 
+    const webhookService = WebhookService.getInstance(userId);
     const { id } = params;
     const webhook = await webhookService.getWebhook(id);
 
@@ -80,16 +87,21 @@ export async function PUT(
     const body = await request.json();
     const { url, secret, retryCount, retryDelay, filters } = body;
 
-    const updatedWebhook = await webhookService.updateWebhook(id, {
-      url,
-      secret,
-      retryCount,
-      retryDelay,
-      filters
+    // Update webhook in database directly since WebhookService doesn't have an update method
+    const updatedWebhook = await prisma.webhook.update({
+      where: { id },
+      data: {
+        url,
+        secret,
+        retryCount,
+        retryDelay,
+        filters: JSON.stringify(filters ?? {})
+      }
     });
 
-    AppLogger.info('Webhook updated successfully', {
-      component: 'WebhookAPI',
+    logInfo('Webhook updated successfully', {
+      message: 'Webhook updated successfully',
+      service: 'WebhookAPI',
       action: 'PUT',
       webhookId: id,
       userId
@@ -97,8 +109,13 @@ export async function PUT(
 
     return NextResponse.json(updatedWebhook);
   } catch (error) {
-    AppLogger.error('Failed to update webhook', error as Error, {
-      component: 'WebhookAPI',
+    const err = error as Error;
+    logError('Failed to update webhook', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack
+    }, {
+      service: 'WebhookAPI',
       action: 'PUT',
       path: `/api/webhooks/${params.id}`,
       webhookId: params.id
@@ -128,6 +145,7 @@ export async function DELETE(
       throw new AppError('User ID not found in session');
     }
 
+    const webhookService = WebhookService.getInstance(userId);
     const { id } = params;
     const webhook = await webhookService.getWebhook(id);
 
@@ -141,8 +159,9 @@ export async function DELETE(
 
     await webhookService.deleteWebhook(id);
 
-    AppLogger.info('Webhook deleted successfully', {
-      component: 'WebhookAPI',
+    logInfo('Webhook deleted successfully', {
+      message: 'Webhook deleted successfully',
+      service: 'WebhookAPI',
       action: 'DELETE',
       webhookId: id,
       userId
@@ -150,8 +169,13 @@ export async function DELETE(
 
     return NextResponse.json({ message: 'Webhook deleted successfully' });
   } catch (error) {
-    AppLogger.error('Failed to delete webhook', error as Error, {
-      component: 'WebhookAPI',
+    const err = error as Error;
+    logError('Failed to delete webhook', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack
+    }, {
+      service: 'WebhookAPI',
       action: 'DELETE',
       path: `/api/webhooks/${params.id}`,
       webhookId: params.id

@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { JobService } from '@/lib/services/jobService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-
-const jobService = JobService.getInstance();
+import prisma from '@/lib/prisma';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
 
 export async function POST(
   request: Request,
@@ -13,37 +10,62 @@ export async function POST(
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
-    }
-
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
     const { jobId } = params;
-    const job = await jobService.cancelJob(jobId, userId);
 
-    AppLogger.info('Job stopped successfully', {
-      component: 'JobStopAPI',
-      action: 'POST',
-      jobId,
-      userId
+    // Verify job exists and belongs to user
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: jobId,
+        userId: session.user.id
+      }
     });
 
-    return NextResponse.json(job);
-  } catch (error) {
-    AppLogger.error('Failed to stop job', error as Error, {
-      component: 'JobStopAPI',
-      action: 'POST',
-      path: `/api/jobs/${params.jobId}/stop`,
-      jobId: params.jobId
-    });
-
-    if (error instanceof AppError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
+    if (!job) {
+      return NextResponse.json(
+        { error: 'Job not found' },
+        { status: 404 }
+      );
     }
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+
+    // Check if job is running
+    if (job.status !== 'running') {
+      return NextResponse.json(
+        { error: 'Job is not running' },
+        { status: 400 }
+      );
+    }
+
+    // Update job status
+    const updatedJob = await prisma.indexingJob.update({
+      where: {
+        id: jobId
+      },
+      data: {
+        status: 'stopped',
+        updatedAt: new Date()
+      }
+    });
+
+    logInfo('Successfully stopped job', {
+      component: 'JobsAPI',
+      action: 'Stop',
+      userId: session.user.id,
+      jobId
+    });
+
+    return NextResponse.json(updatedJob);
+  } catch (error) {
+    logError('Failed to stop job', error as Error, {
+      component: 'JobsAPI',
+      action: 'Stop'
+    });
+    return NextResponse.json(
+      { error: 'Failed to stop job' },
+      { status: 500 }
+    );
   }
 } 

@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { Connection } from '@solana/web3.js';
 import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import { logError, logWarn } from '@/lib/utils/serverLogger';
 
 export interface DataTransformation {
   type: 'map' | 'filter' | 'reduce' | 'custom';
@@ -128,7 +128,7 @@ export class DataProcessingService {
         // Wait for next cycle
         await new Promise(resolve => setTimeout(resolve, 1000));
       } catch (error) {
-        AppLogger.error('Failed to process realtime indexing', error as Error, {
+        await logError('Failed to process realtime indexing', error as Error, {
           component: 'DataProcessingService',
           action: 'handleRealtimeIndexing',
           jobId,
@@ -164,7 +164,7 @@ export class DataProcessingService {
         currentBlock += batchSize;
         await this.updateIndexingProgress(jobId, currentBlock);
       } catch (error) {
-        AppLogger.error('Failed to process historical indexing', error as Error, {
+        await logError('Failed to process historical indexing', error as Error, {
           component: 'DataProcessingService',
           action: 'handleHistoricalIndexing',
           jobId,
@@ -227,7 +227,7 @@ export class DataProcessingService {
         id: ''
       }));
     } catch (error) {
-      AppLogger.error('Failed to fetch latest blockchain data', error as Error, {
+      await logError('Failed to fetch latest blockchain data', error as Error, {
         filters,
       });
       throw new AppError('Failed to fetch latest blockchain data');
@@ -256,7 +256,7 @@ export class DataProcessingService {
       const blocks = await Promise.allSettled(blockPromises);
 
       // Process each block's transactions
-      blocks.forEach((result, index) => {
+      blocks.forEach(async (result, index) => {
         if (result.status === 'fulfilled' && result.value) {
           const block = result.value;
           const slot = startBlock + index;
@@ -299,7 +299,7 @@ export class DataProcessingService {
 
           transactions.push(...processedTxs);
         } else if (result.status === 'rejected') {
-          AppLogger.warn('Failed to fetch block', {
+          await logWarn('Failed to fetch block', {
             slot: startBlock + index,
             error: result.reason,
           });
@@ -308,7 +308,7 @@ export class DataProcessingService {
 
       return transactions;
     } catch (error) {
-      AppLogger.error('Failed to fetch historical blockchain data', error as Error, {
+      await logError('Failed to fetch historical blockchain data', error as Error, {
         startBlock,
         batchSize,
         filters,
@@ -383,7 +383,7 @@ export class DataProcessingService {
           throw new AppError(`Unsupported transformation type: ${transformation.type}`);
       }
     } catch (error) {
-      AppLogger.error('Failed to execute transformation', error as Error, {
+      await logError('Failed to execute transformation', error as Error, {
         transformationType: transformation.type,
         field: transformation.field,
         operation: transformation.operation,
@@ -424,7 +424,7 @@ export class DataProcessingService {
           throw new AppError(`Unsupported custom transformation type: ${config.type}`);
       }
     } catch (error) {
-      AppLogger.error('Failed to execute custom transformation', error as Error, {
+      await logError('Failed to execute custom transformation', error as Error, {
         config: transformation.config,
       });
       throw new AppError('Failed to execute custom transformation');
@@ -511,7 +511,7 @@ export class DataProcessingService {
           throw new AppError(`Unsupported custom aggregation type: ${config.type}`);
       }
     } catch (error) {
-      AppLogger.error('Failed to execute custom aggregation', error as Error, {
+      await logError('Failed to execute custom aggregation', error as Error, {
         aggregationType: aggregation.type,
         field: aggregation.field,
         timeWindow: aggregation.timeWindow,

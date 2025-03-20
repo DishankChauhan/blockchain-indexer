@@ -1,231 +1,152 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
-import { AnalyticsService } from '@/lib/services/analyticsService';
-import type { TransactionMetrics, NFTMetrics, TokenMetrics } from '@/lib/services/analyticsService';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { LineChart, BarChart } from '@/components/Charts';
-import { useToast } from '@/components/ui/Toast';
-import AppLogger from '@/lib/utils/logger';
+import { useEffect, useState } from 'react';
+import { ApiClient } from '@/lib/api/apiClient';
+import { handleError } from '@/lib/utils/errorHandling';
+import { toast } from 'react-hot-toast';
 
-export default function AnalyticsDashboard() {
-  const { data: session } = useSession();
-  const [timeRange, setTimeRange] = useState('24h');
-  const [loading, setLoading] = useState(true);
-  const [metrics, setMetrics] = useState<{
-    transactions?: TransactionMetrics;
-    nft?: NFTMetrics;
-    tokens?: TokenMetrics;
-    trends?: any;
-  }>({});
-  const { toast } = useToast();
+interface JobMetric {
+  id: string;
+  status: string;
+  progress: number;
+  processedCount: number;
+  lastUpdated: string;
+}
+
+interface TimeSeriesData {
+  timestamp: Date;
+  data: any;
+}
+
+interface AnalyticsData {
+  jobMetrics: JobMetric[];
+  timeSeriesData: TimeSeriesData[];
+}
+
+interface ApiResponse<T> {
+  data: T;
+  status: number;
+}
+
+const LoadingSpinner = () => (
+  <div className="flex items-center justify-center p-8">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+  </div>
+);
+
+export default function AnalyticsPage() {
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<AnalyticsData | null>(null);
 
   useEffect(() => {
-    if (session?.user?.id) {
-      loadMetrics();
-    }
-  }, [session, timeRange]);
+    const loadAnalytics = async () => {
+      try {
+        setIsLoading(true);
+        const apiClient = ApiClient.getInstance();
+        const response = await apiClient.get<ApiResponse<AnalyticsData>>('/api/analytics');
+        setData(response.data);
+      } catch (err) {
+        const error = await handleError(err instanceof Error ? err : new Error('Failed to load analytics'), {
+          component: 'AnalyticsPage',
+          action: 'loadAnalytics'
+        });
+        setError(error.message);
+        toast.error('Failed to load analytics data');
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-  const getTimeRange = () => {
-    const end = new Date();
-    const start = new Date();
-    switch (timeRange) {
-      case '24h':
-        start.setHours(start.getHours() - 24);
-        break;
-      case '7d':
-        start.setDate(start.getDate() - 7);
-        break;
-      case '30d':
-        start.setDate(start.getDate() - 30);
-        break;
-      default:
-        start.setHours(start.getHours() - 24);
-    }
-    return { startDate: start, endDate: end };
-  };
+    loadAnalytics();
+  }, []);
 
-  const loadMetrics = async () => {
-    if (!session?.user?.id) return;
-
-    setLoading(true);
-    try {
-      const analyticsService = AnalyticsService.getInstance();
-      const range = getTimeRange();
-
-      const [transactions, nft, tokens, trends] = await Promise.all([
-        analyticsService.getTransactionMetrics(session.user.id, range),
-        analyticsService.getNFTMetrics(session.user.id, range),
-        analyticsService.getTokenMetrics(session.user.id, range),
-        analyticsService.getHistoricalTrends(session.user.id, range, timeRange === '24h' ? 'hour' : 'day')
-      ]);
-
-      setMetrics({ transactions, nft, tokens, trends });
-    } catch (error) {
-      AppLogger.error('Failed to load analytics metrics', error as Error, {
-        userId: session.user.id,
-        timeRange,
-      });
-      
-      toast({
-        title: 'Error',
-        description: 'Failed to load analytics data. Please try again later.',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
+  if (isLoading) {
     return <LoadingSpinner />;
   }
 
-  if (!metrics) {
+  if (error) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="p-4">
+        <div className="bg-red-50 border-l-4 border-red-400 p-4">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm text-red-700">
+                {error}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="p-4">
         <p className="text-gray-500">No analytics data available</p>
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Analytics Dashboard</h1>
-        <Select value={timeRange} onValueChange={setTimeRange}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Select time range" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="24h">Last 24 Hours</SelectItem>
-            <SelectItem value="7d">Last 7 Days</SelectItem>
-            <SelectItem value="30d">Last 30 Days</SelectItem>
-          </SelectContent>
-        </Select>
+    <div className="p-4">
+      <h1 className="text-2xl font-bold mb-6">Analytics Dashboard</h1>
+      
+      {/* Job Metrics */}
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold mb-4">Job Metrics</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {data.jobMetrics.map((metric) => (
+            <div key={metric.id} className="bg-white p-4 rounded-lg shadow">
+              <h3 className="font-medium">Job {metric.id}</h3>
+              <p className="text-sm text-gray-500">Status: {metric.status}</p>
+              <p className="text-sm text-gray-500">Progress: {metric.progress}%</p>
+              <p className="text-sm text-gray-500">Processed: {metric.processedCount} items</p>
+              <p className="text-sm text-gray-500">
+                Last Updated: {new Date(metric.lastUpdated).toLocaleString()}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        {/* Transaction Metrics */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Transactions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <p>Total: {metrics.transactions?.totalTransactions}</p>
-              <p>Success Rate: {(metrics.transactions?.successRate || 0) * 100}%</p>
-              <p>Avg Fee: {metrics.transactions?.averageFee?.toFixed(4)} SOL</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* NFT Metrics */}
-        <Card>
-          <CardHeader>
-            <CardTitle>NFT Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <p>Sales: {metrics.nft?.totalSales}</p>
-              <p>Volume: {metrics.nft?.totalVolume?.toFixed(2)} SOL</p>
-              <p>Unique Buyers: {metrics.nft?.uniqueBuyers}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Token Metrics */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Token Transfers</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <p>Total: {metrics.tokens?.totalTransfers}</p>
-              <p>Unique Tokens: {metrics.tokens?.uniqueTokens}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Transaction Volume</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <LineChart
-              data={metrics.trends?.map((t: any) => ({
-                x: new Date(t.period).toLocaleString(),
-                y: t.transactionCount
-              })) || []}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Program Distribution</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <BarChart
-              data={Object.entries(metrics.transactions?.programDistribution || {}).map(([key, value]) => ({
-                x: key,
-                y: value
-              }))}
-            />
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Top Addresses */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Top Senders</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2">
-              {metrics.tokens?.topSenders.map((sender, i) => (
-                <li key={i} className="flex justify-between">
-                  <span className="truncate">{sender.address}</span>
-                  <span>{sender.count}</span>
-                </li>
+      {/* Time Series Data */}
+      <div>
+        <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Timestamp
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Details
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {data.timeSeriesData.map((item, index) => (
+                <tr key={index}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {new Date(item.timestamp).toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-500">
+                    <pre className="whitespace-pre-wrap">
+                      {JSON.stringify(item.data, null, 2)}
+                    </pre>
+                  </td>
+                </tr>
               ))}
-            </ul>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Top Receivers</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2">
-              {metrics.tokens?.topReceivers.map((receiver, i) => (
-                <li key={i} className="flex justify-between">
-                  <span className="truncate">{receiver.address}</span>
-                  <span>{receiver.count}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

@@ -2,8 +2,8 @@ import { Pool } from 'pg';
 import { IndexingJob, IndexingConfig } from '@/types';
 import { AppError } from '@/lib/utils/errorHandling';
 import { DatabaseService } from './databaseService';
-import JobService from './jobService';
-import AppLogger from '@/lib/utils/logger';
+import { JobService } from './jobService';
+import { logError, logInfo, logDebug } from '@/lib/utils/serverLogger';
 import { SecretsManager } from '@/lib/utils/secrets';
 import { RateLimiter } from '@/lib/utils/rateLimiter';
 import { CircuitBreaker } from '@/lib/utils/circuitBreaker';
@@ -79,7 +79,7 @@ export class HeliusService {
       // Clean up any open resources in other services
       await this.jobService.cleanup();
     } catch (error) {
-      AppLogger.error('Failed to cleanup HeliusService', error as Error, {
+      logError('Failed to cleanup HeliusService', error as Error, {
         component: 'HeliusService',
         action: 'cleanup',
         userId: this.userId
@@ -370,7 +370,7 @@ export class HeliusService {
   ): Promise<void> {
     // Implementation depends on your job storage mechanism
     // This is a placeholder that should be implemented based on your needs
-    AppLogger.info('Updating job metadata', {
+    logInfo('Updating job metadata', {
       component: 'HeliusService',
       action: 'updateJobMetadata',
       jobId,
@@ -493,7 +493,7 @@ export class HeliusService {
     data: HeliusWebhookData[]
   ): Promise<HeliusProcessingResult> {
     try {
-      AppLogger.info('Processing webhook data', {
+      logInfo('Processing webhook data', {
         component: 'HeliusService',
         action: 'handleWebhookData',
         jobId,
@@ -531,7 +531,7 @@ export class HeliusService {
 
           transactionsProcessed++;
         } catch (error) {
-          AppLogger.error('Failed to process transaction', error as Error, {
+          logError('Failed to process transaction', error as Error, {
             component: 'HeliusService',
             action: 'handleWebhookData',
             jobId,
@@ -546,7 +546,7 @@ export class HeliusService {
       }
 
       // Log processing stats
-      AppLogger.info('Webhook data processing completed', {
+      logInfo('Webhook data processing completed', {
         component: 'HeliusService',
         action: 'handleWebhookData',
         jobId,
@@ -560,7 +560,7 @@ export class HeliusService {
         errors: errors.length > 0 ? errors : undefined
       };
     } catch (error) {
-      AppLogger.error('Failed to handle webhook data', error as Error, {
+      logError('Failed to handle webhook data', error as Error, {
         component: 'HeliusService',
         action: 'handleWebhookData',
         jobId,
@@ -595,12 +595,12 @@ export class HeliusService {
         await client.query('BEGIN');
 
         // Process NFT bids
-        const bidService = NFTBidService.getInstance();
-        await bidService.processBidEvent(transaction, client);
+        const bidService = NFTBidService.getInstance(pool);
+        await bidService.processBidEvent(transaction, pool);
 
         // Process NFT prices
-        const priceService = NFTPriceService.getInstance();
-        await priceService.processPriceEvent(transaction, client);
+        const priceService = NFTPriceService.getInstance(pool);
+        await priceService.processPriceEvent(transaction, pool);
 
         // Process other NFT events
         for (const event of nftEvents) {
@@ -638,7 +638,7 @@ export class HeliusService {
         client.release();
       }
     } catch (error) {
-      AppLogger.error('Failed to process NFT transaction', error as Error, {
+      logError('Failed to process NFT transaction', error as Error, {
         component: 'HeliusService',
         action: 'processNFTTransaction',
         signature: transaction.signature
@@ -693,7 +693,7 @@ export class HeliusService {
         client.release();
       }
     } catch (error) {
-      AppLogger.error('Failed to process token transfer', error as Error, {
+      logError('Failed to process token transfer', error as Error, {
         component: 'HeliusService',
         action: 'processTokenTransfer',
         signature: transaction.signature
@@ -743,7 +743,7 @@ export class HeliusService {
         client.release();
       }
     } catch (error) {
-      AppLogger.error('Failed to process program interaction', error as Error, {
+      logError('Failed to process program interaction', error as Error, {
         component: 'HeliusService',
         action: 'processProgramInteraction',
         signature: transaction.signature
@@ -773,7 +773,7 @@ export class HeliusService {
         client.release();
       }
     } catch (error) {
-      AppLogger.error('Failed to process lending protocol transaction', error as Error, {
+      logError('Failed to process lending protocol transaction', error as Error, {
         component: 'HeliusService',
         action: 'processLendingProtocol',
         signature: transaction.signature
@@ -826,7 +826,7 @@ export class HeliusService {
         client.release();
       }
     } catch (error) {
-      AppLogger.error('Failed to process generic transaction', error as Error, {
+      logError('Failed to process generic transaction', error as Error, {
         component: 'HeliusService',
         action: 'processGenericTransaction',
         signature: transaction.signature

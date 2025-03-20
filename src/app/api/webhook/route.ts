@@ -1,60 +1,44 @@
 import { NextResponse } from 'next/server';
 import { WebhookService } from '@/lib/services/webhookService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-import { verifyWebhookSignature } from '@/lib/webhookUtils';
+import { logError, logInfo, logWarn } from '@/lib/utils/serverLogger';
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const signature = request.headers.get('x-signature');
-    const timestamp = request.headers.get('x-timestamp');
-    const body = await request.json();
-    const { webhookId, payload } = body;
+    const body = await req.json();
+    const signature = req.headers.get('x-signature');
 
-    if (!webhookId || !payload) {
-      AppLogger.warn('Invalid webhook request', {
+    if (!body || !signature) {
+      logWarn('Invalid webhook request', {
         component: 'WebhookAPI',
-        action: 'ProcessWebhook',
-        webhookId: webhookId || 'missing',
-        hasPayload: !!payload
+        action: 'POST'
       });
-      throw new AppError('Invalid webhook request');
-    }
-
-    // Verify webhook signature
-    if (!verifyWebhookSignature(payload, signature, timestamp)) {
-      AppLogger.warn('Invalid webhook signature', {
-        component: 'WebhookAPI',
-        action: 'VerifySignature',
-        webhookId,
-        hasSignature: !!signature,
-        hasTimestamp: !!timestamp
-      });
-      throw new AppError('Invalid webhook signature');
+      return new NextResponse('Invalid request', { status: 400 });
     }
 
     const webhookService = WebhookService.getInstance();
-    await webhookService.handleWebhookEvent(webhookId, payload, signature || '');
+    const isValid = await webhookService.verifySignature(body, signature);
 
-    AppLogger.info('Webhook processed successfully', {
+    if (!isValid) {
+      logWarn('Invalid webhook signature', {
+        component: 'WebhookAPI',
+        action: 'POST'
+      });
+      return new NextResponse('Invalid signature', { status: 401 });
+    }
+
+    await webhookService.handleWebhook(body);
+
+    logInfo('Webhook processed successfully', {
       component: 'WebhookAPI',
-      action: 'ProcessWebhook',
-      webhookId
+      action: 'POST'
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    AppLogger.error('Failed to process webhook', error as Error, {
+    logError('Failed to process webhook', error as Error, {
       component: 'WebhookAPI',
-      action: 'ProcessWebhook',
-      path: '/api/webhook'
+      action: 'POST'
     });
-
-    if (error instanceof AppError) {
-      const statusCode = error.message.includes('Invalid signature') ? 401 :
-                        error.message.includes('not found') ? 404 : 400;
-      return NextResponse.json({ error: error.message }, { status: statusCode });
-    }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

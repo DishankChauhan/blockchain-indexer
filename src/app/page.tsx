@@ -1,35 +1,55 @@
-import Link from 'next/link';
+'use client';
 
-export default function Home() {
+import { useSession, signIn } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+
+export default function LandingPage() {
+  const { data: session } = useSession();
+  const router = useRouter();
+
+  if (session) {
+    router.push('/dashboard');
+    return null;
+  }
+
   return (
-    <div className="relative isolate px-6 pt-14 lg:px-8">
-      <div className="mx-auto max-w-2xl py-32 sm:py-48 lg:py-56">
-        <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl">
-            Blockchain Indexing Platform
-          </h1>
-          <p className="mt-6 text-lg leading-8 text-gray-600">
-            Index Solana blockchain data into your PostgreSQL database using Helius webhooks.
-            Monitor NFT prices, token availability, and more in real-time.
-          </p>
-          <div className="mt-10 flex items-center justify-center gap-x-6">
-            <Link
-              href="/dashboard"
-              className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 flex items-center justify-center p-4">
+      <Card className="w-full max-w-md bg-white/5 backdrop-blur-lg border-gray-800">
+        <CardHeader className="text-center">
+          <CardTitle className="text-3xl font-bold text-white">Blockchain Indexer</CardTitle>
+          <CardDescription className="text-gray-300">
+            Track and analyze blockchain transactions in real-time
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Button
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => signIn(undefined, { callbackUrl: '/dashboard' })}
             >
-              Get Started
-            </Link>
-            <a
-              href="https://docs.helius.xyz/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-semibold leading-6 text-gray-900"
+              Sign In
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full border-gray-600 text-gray-300 hover:bg-gray-800"
+              onClick={() => signIn(undefined, { callbackUrl: '/dashboard' })}
             >
-              Learn more <span aria-hidden="true">→</span>
-            </a>
+              Create Account
+            </Button>
           </div>
-        </div>
-      </div>
+          <div className="text-sm text-center text-gray-400">
+            <p>Start indexing and analyzing blockchain data with ease</p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 } 

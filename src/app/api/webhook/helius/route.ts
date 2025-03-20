@@ -1,81 +1,51 @@
 import { NextResponse } from 'next/server';
 import { HeliusService } from '@/lib/services/heliusService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth/options';
+import { logError, logInfo, logWarn } from '@/lib/utils/serverLogger';
 
 const WEBHOOK_SECRET = process.env.HELIUS_WEBHOOK_SECRET;
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const heliusService = HeliusService.getInstance(session.user.id);
-
-    // Verify webhook signature
-    const signature = req.headers.get('x-signature');
-    if (!signature || signature !== WEBHOOK_SECRET) {
-      AppLogger.warn('Invalid webhook signature', {
-        component: 'HeliusWebhook',
-        action: 'ValidateSignature',
-        receivedSignature: signature || 'none'
-      });
-      return NextResponse.json(
-        { error: 'Invalid signature' },
-        { status: 401 }
-      );
-    }
-
     const body = await req.json();
-    const { jobId, userId, data } = body;
+    const signature = req.headers.get('x-signature');
+    const webhookId = req.headers.get('x-webhook-id');
 
-    if (!jobId || !userId || !Array.isArray(data)) {
-      AppLogger.warn('Invalid webhook payload', {
-        component: 'HeliusWebhook',
-        action: 'ValidatePayload',
-        jobId: jobId || 'missing',
-        userId: userId || 'missing',
-        hasData: !!data,
-        isDataArray: Array.isArray(data)
+    if (!signature || !webhookId) {
+      logWarn('Invalid webhook signature', {
+        component: 'HeliusWebhookAPI',
+        action: 'POST',
+        hasSignature: !!signature,
+        hasWebhookId: !!webhookId
       });
-      return NextResponse.json(
-        { error: 'Invalid webhook payload' },
-        { status: 400 }
-      );
+      return new NextResponse('Invalid signature', { status: 401 });
     }
 
-    await heliusService.handleWebhookData(jobId, userId, data);
+    if (!body || !Array.isArray(body)) {
+      logWarn('Invalid webhook payload', {
+        component: 'HeliusWebhookAPI',
+        action: 'POST',
+        webhookId
+      });
+      return new NextResponse('Invalid payload', { status: 400 });
+    }
 
-    AppLogger.info('Webhook data processed successfully', {
-      component: 'HeliusWebhook',
-      action: 'ProcessData',
-      jobId,
-      userId,
-      dataLength: data.length
+    const heliusService = HeliusService.getInstance();
+    const result = await heliusService.handleWebhookData(body, webhookId);
+
+    logInfo('Webhook data processed successfully', {
+      component: 'HeliusWebhookAPI',
+      action: 'POST',
+      webhookId,
+      transactionsProcessed: result.transactionsProcessed,
+      errorsEncountered: result.errorsEncountered
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    AppLogger.error('Failed to process webhook data', error as Error, {
-      component: 'HeliusWebhook',
-      action: 'ProcessData',
-      path: '/api/webhook/helius'
+    logError('Failed to process webhook data', error as Error, {
+      component: 'HeliusWebhookAPI',
+      action: 'POST'
     });
-
-    if (error instanceof AppError) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: error.statusCode }
-      );
-    }
-
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

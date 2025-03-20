@@ -1,6 +1,6 @@
 import { Pool, PoolClient } from 'pg';
+import { logError, logInfo } from '../utils/serverLogger';
 import { AppError } from '../utils/errorHandling';
-import AppLogger from '../utils/logger';
 import { HeliusWebhookData } from '../types/helius';
 
 export interface LendingToken {
@@ -76,7 +76,7 @@ export class LendingService {
         return;
       }
 
-      AppLogger.info('Processing lending events', {
+      logInfo('Processing lending events', {
         component: 'LendingService',
         action: 'processLendingEvent',
         signature: transaction.signature,
@@ -87,7 +87,7 @@ export class LendingService {
         await this.upsertLendingData(event, client);
       }
     } catch (error) {
-      AppLogger.error('Failed to process lending event', error as Error, {
+      logError('Failed to process lending event', error as Error, {
         component: 'LendingService',
         action: 'processLendingEvent',
         signature: transaction.signature
@@ -144,7 +144,7 @@ export class LendingService {
         lastUpdated: new Date(row.last_updated)
       }));
     } catch (error) {
-      AppLogger.error('Failed to get available tokens', error as Error, {
+      logError('Failed to get available tokens', error as Error, {
         component: 'LendingService',
         action: 'getAvailableTokens'
       });
@@ -225,14 +225,14 @@ export class LendingService {
         ]
       );
 
-      AppLogger.info('Processed lending data', {
+      logInfo('Processed lending data', {
         component: 'LendingService',
         action: 'upsertLendingData',
         tokenMint: event.tokenMint,
         protocolId: event.protocolId
       });
     } catch (error) {
-      AppLogger.error('Failed to upsert lending data', error as Error, {
+      logError('Failed to upsert lending data', error as Error, {
         component: 'LendingService',
         action: 'upsertLendingData',
         tokenMint: event.tokenMint

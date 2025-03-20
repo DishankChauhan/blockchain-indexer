@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import prisma from '@/lib/prisma';
 import { DatabaseService } from '@/lib/services/databaseService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { logError, logInfo } from '@/lib/utils/serverLogger';
 
 export async function POST(
   request: Request,
@@ -14,70 +11,63 @@ export async function POST(
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) {
-      AppLogger.warn('Unauthorized access attempt to test connection', {
-        component: 'ConnectionsAPI',
-        action: 'TestConnection',
-        connectionId: params.connectionId
-      });
-      throw new AppError('Unauthorized');
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email }
-    });
+    const { connectionId } = params;
 
-    if (!user) {
-      throw new AppError('User not found');
-    }
-
-    const dbService = DatabaseService.getInstance();
-
-    // Get the connection details
+    // Get the connection
     const connection = await prisma.databaseConnection.findFirst({
       where: {
-        id: params.connectionId,
-        userId: user.id
+        id: connectionId,
+        userId: session.user.id
       }
     });
 
     if (!connection) {
-      throw new AppError('Connection not found');
+      return NextResponse.json(
+        { error: 'Connection not found' },
+        { status: 404 }
+      );
     }
 
     // Test the connection
-    await dbService.testConnection({
-      host: connection.host,
-      port: connection.port,
-      database: connection.database,
-      username: connection.username,
-      password: connection.password
-    });
+    const dbService = DatabaseService.getInstance();
+    const pool = await dbService.getConnection(connectionId, session.user.id);
+    const isValid = pool !== null;
 
     // Update connection status
-    await dbService.updateConnectionStatus(params.connectionId, user.id, 'active');
-
-    AppLogger.info('Connection test successful', {
-      component: 'ConnectionsAPI',
-      action: 'TestConnection',
-      connectionId: params.connectionId,
-      userId: user.id
+    await prisma.databaseConnection.update({
+      where: { id: connectionId },
+      data: {
+        status: isValid ? 'active' : 'error',
+        updatedAt: new Date()
+      }
     });
 
-    return NextResponse.json({ success: true, message: 'Connection test successful' });
+    logInfo('Successfully tested database connection', {
+      component: 'ConnectionsAPI',
+      action: 'Test',
+      userId: session.user.id,
+      connectionId: connectionId,
+      status: isValid ? 'active' : 'error'
+    });
+
+    return NextResponse.json({
+      data: {
+        status: isValid ? 'active' : 'error'
+      }
+    });
   } catch (error) {
-    AppLogger.error('Failed to test connection', error as Error, {
+    logError('Failed to test database connection', error as Error, {
       component: 'ConnectionsAPI',
-      action: 'TestConnection',
-      connectionId: params.connectionId,
-      path: `/api/connections/${params.connectionId}/test`
+      action: 'Test'
     });
-
-    if (error instanceof AppError) {
-      const statusCode = error.message.includes('not found') ? 404 :
-                        error.message.includes('Unauthorized') ? 403 : 401;
-      return NextResponse.json({ error: error.message }, { status: statusCode });
-    }
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to test connection' },
+      { status: 500 }
+    );
   }
 } 

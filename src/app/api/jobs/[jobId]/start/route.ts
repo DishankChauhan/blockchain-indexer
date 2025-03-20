@@ -1,49 +1,53 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { JobService } from '@/lib/services/jobService';
-import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/prisma';
 
-const jobService = JobService.getInstance();
+interface Props {
+  params: { jobId: string }
+}
 
-export async function POST(
-  request: Request,
-  { params }: { params: { jobId: string } }
-) {
+export async function POST(req: Request, { params }: Props) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
-    }
-
-    const { jobId } = params;
-    const job = await jobService.resumeJob(jobId, userId);
-
-    AppLogger.info('Job started successfully', {
-      component: 'JobStartAPI',
-      action: 'POST',
-      jobId,
-      userId
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: params.jobId,
+        userId: session.user.id
+      }
     });
 
-    return NextResponse.json(job);
-  } catch (error) {
-    AppLogger.error('Failed to start job', error as Error, {
+    if (!job) {
+      return new NextResponse('Job not found', { status: 404 });
+    }
+
+    const updatedJob = await prisma.indexingJob.update({
+      where: { id: params.jobId },
+      data: {
+        status: 'active',
+        lastRunAt: new Date()
+      }
+    });
+
+    logInfo('Job started successfully', {
       component: 'JobStartAPI',
       action: 'POST',
-      path: `/api/jobs/${params.jobId}/start`,
       jobId: params.jobId
     });
 
-    if (error instanceof AppError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
+    return NextResponse.json({ data: updatedJob });
+  } catch (error) {
+    logError('Failed to start job', error as Error, {
+      component: 'JobStartAPI',
+      action: 'POST',
+      jobId: params.jobId
+    });
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 } 

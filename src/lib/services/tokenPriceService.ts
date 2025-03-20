@@ -1,6 +1,6 @@
 import { Pool, PoolClient } from 'pg';
 import { AppError } from '../utils/errorHandling';
-import ServerLogger from '../utils/serverLogger';
+import { logError, logInfo } from '../utils/serverLogger';
 import { HeliusWebhookData } from '../types/helius';
 
 export interface TokenPrice {
@@ -73,7 +73,7 @@ export class TokenPriceService {
         return;
       }
 
-      ServerLogger.info('Processing token price events', {
+      logInfo('Processing token price events', {
         component: 'TokenPriceService',
         action: 'processPriceEvent',
         signature: transaction.signature,
@@ -84,7 +84,7 @@ export class TokenPriceService {
         await this.upsertPriceData(event, client);
       }
     } catch (error) {
-      ServerLogger.error('Failed to process price event', error as Error, {
+      logError('Failed to process price event', error as Error, {
         component: 'TokenPriceService',
         action: 'processPriceEvent',
         signature: transaction.signature
@@ -142,7 +142,7 @@ export class TokenPriceService {
         lastUpdated: new Date(row.last_updated)
       }));
     } catch (error) {
-      ServerLogger.error('Failed to get current prices', error as Error, {
+      logError('Failed to get current prices', error as Error, {
         component: 'TokenPriceService',
         action: 'getCurrentPrices'
       });
@@ -193,7 +193,7 @@ export class TokenPriceService {
         platforms: row.platforms
       }));
     } catch (error) {
-      ServerLogger.error('Failed to get aggregated prices', error as Error, {
+      logError('Failed to get aggregated prices', error as Error, {
         component: 'TokenPriceService',
         action: 'getAggregatedPrices'
       });
@@ -385,7 +385,7 @@ export class TokenPriceService {
       }
     }
 
-    ServerLogger.debug('Extracted Orca price events', {
+    logInfo('Extracted Orca price events', {
       component: 'TokenPriceService',
       action: 'extractOrcaPrices',
       eventCount: events.length,
@@ -459,7 +459,7 @@ export class TokenPriceService {
       }
     }
 
-    ServerLogger.debug('Extracted Jupiter price events', {
+    logInfo('Extracted Jupiter price events', {
       component: 'TokenPriceService',
       action: 'extractJupiterPrices',
       eventCount: events.length,
@@ -535,7 +535,7 @@ export class TokenPriceService {
       }
     }
 
-    ServerLogger.debug('Extracted Serum price events', {
+    logInfo('Extracted Serum price events', {
       component: 'TokenPriceService',
       action: 'extractSerumPrices',
       eventCount: events.length,
@@ -600,7 +600,7 @@ export class TokenPriceService {
         ]
       );
 
-      ServerLogger.info('Processed token price data', {
+      logInfo('Processed token price data', {
         component: 'TokenPriceService',
         action: 'upsertPriceData',
         baseMint: event.baseMint,
@@ -608,7 +608,7 @@ export class TokenPriceService {
         poolAddress: event.poolAddress
       });
     } catch (error) {
-      ServerLogger.error('Failed to upsert price data', error as Error, {
+      logError('Failed to upsert price data', error as Error, {
         component: 'TokenPriceService',
         action: 'upsertPriceData',
         baseMint: event.baseMint,

@@ -3,101 +3,193 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { WebhookService, WebhookConfig } from '@/lib/services/webhookService';
 import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
-import { PrismaClient } from '@prisma/client';
-
-const webhookService = WebhookService.getInstance();
-const prisma = new PrismaClient();
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/prisma';
 
 export async function GET(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
-    }
-
-    const webhooks = await webhookService.listWebhooks(userId);
-    return NextResponse.json(webhooks);
-  } catch (error) {
-    AppLogger.error('Failed to list webhooks', error as Error, {
-      component: 'WebhooksAPI',
-      action: 'GET',
-      path: '/api/webhooks'
-    });
-
-    if (error instanceof AppError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
-export async function POST(request: Request) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      throw new AppError('Unauthorized');
-    }
-
-    const userId = session.user?.id;
-    if (!userId) {
-      throw new AppError('User ID not found in session');
-    }
-
-    const body = await request.json();
-    const { url, secret, retryCount, retryDelay, filters, notificationEmail } = body;
-
-    if (!url || !secret) {
-      throw new AppError('Missing required fields');
-    }
-
-    const config: WebhookConfig = {
-      url,
-      secret,
-      retryCount,
-      retryDelay,
-      filters,
-      notificationEmail
-    };
-
-    // Get the first active indexing job for the user
-    const indexingJob = await prisma.indexingJob.findFirst({
+    const webhooks = await prisma.webhook.findMany({
       where: {
-        userId,
-        status: 'active'
+        userId: session.user.id
+      },
+      select: {
+        id: true,
+        url: true,
+        secret: true,
+        status: true,
+        filters: true,
+        config: true,
+        createdAt: true,
+        updatedAt: true,
+        indexingJob: {
+          select: {
+            id: true,
+            type: true,
+            status: true
+          }
+        }
       }
     });
 
-    if (!indexingJob) {
-      throw new AppError('No active indexing job found');
-    }
-
-    const webhook = await webhookService.createWebhook(userId, indexingJob.id, config);
-
-    AppLogger.info('Webhook created successfully', {
-      component: 'WebhooksAPI',
-      action: 'POST',
-      webhookId: webhook.id,
-      userId,
-      indexingJobId: indexingJob.id
+    return NextResponse.json({
+      data: webhooks,
+      status: 200
     });
-
-    return NextResponse.json(webhook);
   } catch (error) {
-    AppLogger.error('Failed to create webhook', error as Error, {
+    await logError('Failed to fetch webhooks', error as Error, {
       component: 'WebhooksAPI',
-      action: 'POST',
-      path: '/api/webhooks'
+      action: 'GET'
+    });
+    return NextResponse.json({ 
+      data: null, 
+      status: 500,
+      error: 'Internal Server Error' 
+    }, { 
+      status: 500 
+    });
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
+    }
+
+    const body = await req.json();
+    const { url, secret, indexingJobId, filters } = body;
+
+    if (!url || !secret || !indexingJobId) {
+      throw new AppError('Missing required fields', 400);
+    }
+
+    // Verify the indexing job belongs to the user
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: indexingJobId,
+        userId: session.user.id
+      }
     });
 
-    if (error instanceof AppError) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
+    if (!job) {
+      throw new AppError('Indexing job not found', 404);
     }
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+
+    const webhookConfig: WebhookConfig = {
+      url,
+      secret,
+      filters: filters || {},
+      retryCount: 3,
+      retryDelay: 1000
+    };
+
+    const webhookService = WebhookService.getInstance(session.user.id);
+    const webhook = await webhookService.createWebhook(session.user.id, indexingJobId, webhookConfig);
+    await logInfo('Webhook created successfully', {
+      component: 'WebhooksAPI',
+      action: 'POST',
+      webhookId: webhook.id
+    });
+
+    return NextResponse.json({
+      data: webhook,
+      status: 201
+    });
+  } catch (error) {
+    await logError('Failed to create webhook', error as Error, {
+      component: 'WebhooksAPI',
+      action: 'POST'
+    });
+    
+    if (error instanceof AppError) {
+      return NextResponse.json({ 
+        data: null, 
+        status: error.statusCode,
+        error: error.message 
+      }, { 
+        status: error.statusCode 
+      });
+    }
+
+    return NextResponse.json({ 
+      data: null, 
+      status: 500,
+      error: 'Internal Server Error' 
+    }, { 
+      status: 500 
+    });
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
+    }
+
+    const { searchParams } = new URL(req.url);
+    const webhookId = searchParams.get('id');
+
+    if (!webhookId) {
+      throw new AppError('Webhook ID is required', 400);
+    }
+
+    // Verify the webhook belongs to the user
+    const webhook = await prisma.webhook.findFirst({
+      where: {
+        id: webhookId,
+        userId: session.user.id
+      }
+    });
+
+    if (!webhook) {
+      throw new AppError('Webhook not found', 404);
+    }
+
+    const webhookService = WebhookService.getInstance(session.user.id);
+    await webhookService.deleteWebhook(webhookId);
+    await logInfo('Webhook deleted successfully', {
+      component: 'WebhooksAPI',
+      action: 'DELETE',
+      webhookId
+    });
+
+    return NextResponse.json({
+      data: { success: true },
+      status: 200
+    });
+  } catch (error) {
+    await logError('Failed to delete webhook', error as Error, {
+      component: 'WebhooksAPI',
+      action: 'DELETE'
+    });
+    
+    if (error instanceof AppError) {
+      return NextResponse.json({ 
+        data: null, 
+        status: error.statusCode,
+        error: error.message 
+      }, { 
+        status: error.statusCode 
+      });
+    }
+
+    return NextResponse.json({ 
+      data: null, 
+      status: 500,
+      error: 'Internal Server Error' 
+    }, { 
+      status: 500 
+    });
   }
 } 

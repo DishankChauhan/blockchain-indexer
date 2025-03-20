@@ -1,7 +1,7 @@
 import { PrismaClient, Prisma, Webhook } from '@prisma/client';
 import { WebhookLog } from '@prisma/client';
 import { AppError } from '../utils/errorHandling';
-import AppLogger from '../utils/logger';
+import { logError, logInfo, logDebug } from '../utils/serverLogger';
 import { HeliusService } from './heliusService';
 import { EmailService } from './emailService';
 import { createHmac } from 'crypto';
@@ -61,7 +61,7 @@ export class WebhookService {
       try {
         this.cleanupRateLimits();
       } catch (error) {
-        AppLogger.error('Failed to cleanup rate limits', error as Error, {
+        logError('Failed to cleanup rate limits', error as Error, {
           component: 'WebhookService',
           action: 'cleanupRateLimits'
         });
@@ -102,12 +102,12 @@ export class WebhookService {
       // Reset singleton instance
       WebhookService.instance = null;
       
-      AppLogger.info('WebhookService cleaned up successfully', {
+      logInfo('WebhookService cleaned up successfully', {
         userId: this.userId,
       });
     } catch (error) {
       const errorObj = error instanceof Error ? error : new Error(String(error));
-      AppLogger.error('Failed to cleanup WebhookService', errorObj, {
+      logError('Failed to cleanup WebhookService', errorObj, {
         userId: this.userId,
       });
       // Don't throw the error to handle cleanup failures gracefully
@@ -173,7 +173,7 @@ export class WebhookService {
 
       return webhook;
     } catch (error) {
-      AppLogger.error('Failed to create webhook', error as Error, {
+      logError('Failed to create webhook', error as Error, {
         component: 'WebhookService',
         action: 'createWebhook',
         userId: userId
@@ -200,7 +200,7 @@ export class WebhookService {
         where: { id }
       });
     } catch (error) {
-      AppLogger.error('Failed to delete webhook', error as Error, {
+      logError('Failed to delete webhook', error as Error, {
         component: 'WebhookService',
         action: 'deleteWebhook',
         webhookId: id
@@ -226,7 +226,7 @@ export class WebhookService {
 
       return { ...webhook, logs };
     } catch (error) {
-      AppLogger.error('Failed to get webhook', error as Error, {
+      logError('Failed to get webhook', error as Error, {
         component: 'WebhookService',
         action: 'getWebhook',
         webhookId: id
@@ -253,7 +253,7 @@ export class WebhookService {
 
       return webhooksWithLogs;
     } catch (error) {
-      AppLogger.error('Failed to list webhooks', error as Error, {
+      logError('Failed to list webhooks', error as Error, {
         component: 'WebhookService',
         action: 'listWebhooks',
         userId: userId
@@ -271,7 +271,7 @@ export class WebhookService {
       const expectedSignature = this.generateSignature(secret, payload);
       return signature === expectedSignature;
     } catch (error) {
-      AppLogger.error('Failed to verify signature', error as Error, {
+      logError('Failed to verify signature', error as Error, {
         component: 'WebhookService',
         action: 'verifySignature'
       });
@@ -432,7 +432,7 @@ export class WebhookService {
         }
       });
     } catch (error) {
-      AppLogger.error('Failed to send webhook notification', error as Error, {
+      logError('Failed to send webhook notification', error as Error, {
         component: 'WebhookService',
         action: 'sendNotification',
         webhookId: webhook.id,
@@ -466,7 +466,7 @@ export class WebhookService {
         },
       });
     } catch (error) {
-      AppLogger.error('Failed to log webhook event', error as Error, {
+      logError('Failed to log webhook event', error as Error, {
         component: 'WebhookService',
         action: 'logWebhookEvent',
         webhookId,

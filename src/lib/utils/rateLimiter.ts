@@ -1,4 +1,4 @@
-import AppLogger from './logger';
+import { logError, logInfo, logWarn } from './serverLogger';
 
 interface RateLimitConfig {
   maxRequests: number;
@@ -48,7 +48,7 @@ export class RateLimiter {
   public async checkLimit(service: string): Promise<boolean> {
     const config = this.configs.get(service);
     if (!config) {
-      AppLogger.warn('No rate limit configuration found for service', {
+      logWarn('No rate limit configuration found for service', {
         component: 'RateLimiter',
         action: 'checkLimit',
         service
@@ -72,7 +72,7 @@ export class RateLimiter {
       return true;
     }
 
-    AppLogger.warn('Rate limit exceeded', {
+    logWarn('Rate limit exceeded', {
       component: 'RateLimiter',
       action: 'checkLimit',
       service,

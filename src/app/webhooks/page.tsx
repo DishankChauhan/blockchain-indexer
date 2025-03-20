@@ -53,8 +53,8 @@ export default function WebhooksPage() {
       if (!response.ok) {
         throw new Error('Failed to fetch webhooks');
       }
-      const data = await response.json();
-      setWebhooks(data);
+      const { data } = await response.json();
+      setWebhooks(data || []);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load webhooks';
       clientLogger.error('Failed to load webhooks', {

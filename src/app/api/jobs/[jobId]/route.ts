@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import JobService  from '@/lib/services/jobService';
+import { JobService } from '@/lib/services/jobService';
 import { AppError } from '@/lib/utils/errorHandling';
-import AppLogger from '@/lib/utils/logger';
+import { logError, logInfo, logWarn } from '@/lib/utils/serverLogger';
+import prisma from '@/lib/db';
+
+const jobService = JobService.getInstance();
 
 export async function GET(
   req: Request,
@@ -12,22 +15,30 @@ export async function GET(
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
-      AppLogger.warn('Unauthorized access attempt to job details', {
-        component: 'JobsAPI',
+      logWarn('Unauthorized access attempt to job details', {
+        message: 'Unauthorized access attempt to job details',
+        service: 'JobsAPI',
         action: 'GET',
         jobId: params.jobId
       });
       throw new AppError('Unauthorized');
     }
 
-    const jobService = JobService.getInstance();
-    const job = await jobService.getJob(
-      params.jobId,
-      session.user.email as string
-    );
+    // Get job directly from database since JobService doesn't have getJob method
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: params.jobId,
+        userId: session.user.id
+      }
+    });
 
-    AppLogger.info('Job details retrieved successfully', {
-      component: 'JobsAPI',
+    if (!job) {
+      throw new AppError('Job not found');
+    }
+
+    logInfo('Job details retrieved successfully', {
+      message: 'Job details retrieved successfully',
+      service: 'JobsAPI',
       action: 'GET',
       jobId: params.jobId,
       userId: session.user.email
@@ -35,8 +46,13 @@ export async function GET(
 
     return NextResponse.json(job);
   } catch (error) {
-    AppLogger.error('Failed to get job details', error as Error, {
-      component: 'JobsAPI',
+    const err = error as Error;
+    logError('Failed to get job details', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack
+    }, {
+      service: 'JobsAPI',
       action: 'GET',
       jobId: params.jobId,
       path: `/api/jobs/${params.jobId}`
@@ -63,8 +79,9 @@ export async function PATCH(
   try {
     session = await getServerSession(authOptions);
     if (!session?.user) {
-      AppLogger.warn('Unauthorized access attempt to job update', {
-        component: 'JobsAPI',
+      logWarn('Unauthorized access attempt to job update', {
+        message: 'Unauthorized access attempt to job update',
+        service: 'JobsAPI',
         action: 'PATCH',
         jobId: params.jobId
       });
@@ -75,8 +92,9 @@ export async function PATCH(
     const { action } = body;
 
     if (!action || !['pause', 'resume', 'cancel'].includes(action)) {
-      AppLogger.warn('Invalid job action requested', {
-        component: 'JobsAPI',
+      logWarn('Invalid job action requested', {
+        message: 'Invalid job action requested',
+        service: 'JobsAPI',
         action: 'PATCH',
         jobId: params.jobId,
         requestedAction: action,
@@ -85,52 +103,45 @@ export async function PATCH(
       throw new AppError('Invalid action');
     }
 
-    const jobService = JobService.getInstance();
-    let job;
+    // Get job to verify ownership
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: params.jobId,
+        userId: session.user.id
+      }
+    });
 
-    switch (action) {
-      case 'pause':
-        job = await jobService.pauseJob(
-          params.jobId,
-          session.user.email as string
-        );
-        AppLogger.info('Job paused successfully', {
-          component: 'JobsAPI',
-          action: 'PauseJob',
-          jobId: params.jobId,
-          userId: session.user.email
-        });
-        break;
-      case 'resume':
-        job = await jobService.resumeJob(
-          params.jobId,
-          session.user.email as string
-        );
-        AppLogger.info('Job resumed successfully', {
-          component: 'JobsAPI',
-          action: 'ResumeJob',
-          jobId: params.jobId,
-          userId: session.user.email
-        });
-        break;
-      case 'cancel':
-        job = await jobService.cancelJob(
-          params.jobId,
-          session.user.email as string
-        );
-        AppLogger.info('Job cancelled successfully', {
-          component: 'JobsAPI',
-          action: 'CancelJob',
-          jobId: params.jobId,
-          userId: session.user.email
-        });
-        break;
+    if (!job) {
+      throw new AppError('Job not found');
     }
 
-    return NextResponse.json(job);
+    // Update job status based on action
+    const status = action === 'pause' ? 'paused' :
+                  action === 'resume' ? 'active' :
+                  'cancelled';
+
+    const updatedJob = await prisma.indexingJob.update({
+      where: { id: params.jobId },
+      data: { status }
+    });
+
+    logInfo(`Job ${action}d successfully`, {
+      message: `Job ${action}d successfully`,
+      service: 'JobsAPI',
+      action: action.toUpperCase(),
+      jobId: params.jobId,
+      userId: session.user.email
+    });
+
+    return NextResponse.json(updatedJob);
   } catch (error) {
-    AppLogger.error('Failed to update job', error as Error, {
-      component: 'JobsAPI',
+    const err = error as Error;
+    logError('Failed to update job', {
+      message: err.message,
+      name: err.name,
+      stack: err.stack
+    }, {
+      service: 'JobsAPI',
       action: 'PATCH',
       jobId: params.jobId,
       userId: session?.user?.email || undefined,
@@ -151,50 +162,54 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  req: Request,
+  request: Request,
   { params }: { params: { jobId: string } }
 ) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      AppLogger.warn('Unauthorized access attempt to delete job', {
-        component: 'JobsAPI',
-        action: 'DELETE',
-        jobId: params.jobId
-      });
-      throw new AppError('Unauthorized');
+    if (!session?.user?.id) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const jobService = JobService.getInstance();
-    await jobService.cancelJob(
-      params.jobId,
-      session.user.email as string
-    );
+    const { jobId } = params;
 
-    AppLogger.info('Job deleted successfully', {
-      component: 'JobsAPI',
-      action: 'DELETE',
-      jobId: params.jobId,
-      userId: session.user.email
+    // Verify job exists and belongs to user
+    const job = await prisma.indexingJob.findFirst({
+      where: {
+        id: jobId,
+        userId: session.user.id
+      }
     });
 
-    return NextResponse.json({ success: true });
+    if (!job) {
+      return NextResponse.json(
+        { error: 'Job not found' },
+        { status: 404 }
+      );
+    }
+
+    // Delete the job
+    await prisma.indexingJob.delete({
+      where: {
+        id: jobId
+      }
+    });
+
+    logInfo('Successfully deleted job', {
+      component: 'JobsAPI',
+      action: 'DELETE',
+      userId: session.user.id,
+      jobId
+    });
+
+    return new NextResponse(null, { status: 204 });
   } catch (error) {
-    AppLogger.error('Failed to delete job', error as Error, {
+    logError('Failed to delete job', error as Error, {
       component: 'JobsAPI',
-      action: 'DELETE',
-      jobId: params.jobId,
-      path: `/api/jobs/${params.jobId}`
+      action: 'DELETE'
     });
-
-    if (error instanceof AppError) {
-      const statusCode = error.message.includes('Unauthorized') ? 401 :
-                        error.message.includes('not found') ? 404 : 400;
-      return NextResponse.json({ error: error.message }, { status: statusCode });
-    }
-
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Failed to delete job' },
       { status: 500 }
     );
   }
