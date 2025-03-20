@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'Blockchain Indexer',
-  description: 'Index and analyze blockchain data',
+  description: 'High-performance blockchain data indexing platform',
 };
 
 export default function RootLayout({
@@ -21,7 +21,9 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <Navbar />
-          <main>{children}</main>
+          <div className="pt-16">
+            {children}
+          </div>
         </AuthProvider>
       </body>
     </html>
