@@ -6,6 +6,8 @@ import { ApiClient } from '@/lib/api/apiClient';
 import { AppError, handleError } from '@/lib/utils/errorHandling';
 import Link from 'next/link';
 import { toast } from 'react-hot-toast';
+import { useSession } from 'next-auth/react';
+import { Card } from '@/components/ui/card';
 
 // Types
 interface DashboardData {
@@ -289,6 +291,7 @@ const stopJob = async (jobId: string) => {
 // Main component
 export default function DashboardPage() {
   const { isLoading, error, data } = useDashboardData();
+  const { data: session } = useSession();
 
   if (isLoading) {
     return (
@@ -307,25 +310,27 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4">User Info</h2>
-          <div>{data.user?.email}</div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4">Database Connections</h2>
-          <div>{data.connections?.length || 0} active connections</div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4">Indexing Jobs</h2>
-          <div>{data.jobs?.length || 0} jobs running</div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-semibold mb-4">Notifications</h2>
-          <div>{data.notifications?.length || 0} unread notifications</div>
-        </div>
+    <div className="container mx-auto p-6 space-y-8">
+      <div className="space-y-6">
+        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
+          <h2 className="text-xl font-semibold text-white mb-4">User Info</h2>
+          <p className="text-white">{session?.user?.email}</p>
+        </Card>
+
+        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
+          <h2 className="text-xl font-semibold text-white mb-2">Database Connections</h2>
+          <p className="text-white">{data.connections?.length || 0} active connections</p>
+        </Card>
+
+        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
+          <h2 className="text-xl font-semibold text-white mb-2">Indexing Jobs</h2>
+          <p className="text-white">{data.jobs?.length || 0} jobs running</p>
+        </Card>
+
+        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
+          <h2 className="text-xl font-semibold text-white mb-2">Notifications</h2>
+          <p className="text-white">{data.notifications?.length || 0} unread notifications</p>
+        </Card>
       </div>
     </div>
   );
