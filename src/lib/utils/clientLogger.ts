@@ -1,36 +1,18 @@
-export interface LogContext {
-  [key: string]: any;
-}
-
-export function logError(message: string, error?: Error, context?: LogContext) {
-  if (typeof window !== 'undefined') {
-    console.error(message, error || '', context || '');
-  }
-}
-
-export function logWarn(message: string, context?: LogContext) {
-  if (typeof window !== 'undefined') {
-    console.warn(message, context || '');
-  }
-}
-
-export function logInfo(message: string, context?: LogContext) {
-  if (typeof window !== 'undefined') {
-    console.info(message, context || '');
-  }
-}
-
-export function logDebug(message: string, context?: LogContext) {
-  if (typeof window !== 'undefined') {
-    console.debug(message, context || '');
-  }
-}
+'use client';
 
 const clientLogger = {
-  error: logError,
-  warn: logWarn,
-  info: logInfo,
-  debug: logDebug
+  info: (message: string, metadata?: any) => {
+    console.info(message, metadata);
+  },
+  error: (message: string, error: Error | null, metadata?: any) => {
+    console.error(message, error, metadata);
+  },
+  warn: (message: string, metadata?: any) => {
+    console.warn(message, metadata);
+  },
+  debug: (message: string, metadata?: any) => {
+    console.debug(message, metadata);
+  }
 };
 
 export default clientLogger; 

@@ -1,7 +1,7 @@
 import Bull from 'bull';
 import { DatabaseService } from '../services/databaseService';
 import { HeliusService } from '../services/heliusService';
-import AppLogger from '../utils/logger';
+import serverLogger from '../utils/serverLogger';
 import { Job } from 'bull';
 
 interface WebhookJobData {
@@ -17,7 +17,7 @@ const indexingQueue = new Bull('indexing', {
   },
 });
 
-AppLogger.info('Blockchain Indexer Worker initialized', {
+serverLogger.info('Blockchain Indexer Worker initialized', {
   component: 'Worker',
   action: 'Initialize',
   message: '🚀 Blockchain Indexer Worker started and ready to process jobs'
@@ -25,7 +25,7 @@ AppLogger.info('Blockchain Indexer Worker initialized', {
 
 // Process jobs
 indexingQueue.process('start-indexing', async (job) => {
-  AppLogger.info('Processing indexing job', {
+  serverLogger.info('Processing indexing job', {
     component: 'Worker',
     action: 'ProcessJob',
     jobId: job.id,
@@ -42,7 +42,7 @@ indexingQueue.process('start-indexing', async (job) => {
     // Check if job was cancelled
     const jobData = await indexingQueue.getJob(job.id);
     if (!jobData) {
-      AppLogger.warn('Job cancelled - job not found', {
+      serverLogger.warn('Job cancelled - job not found', {
         component: 'Worker',
         action: 'CheckJobStatus',
         jobId: job.id
@@ -51,7 +51,7 @@ indexingQueue.process('start-indexing', async (job) => {
     }
     const jobState = await jobData.getState();
     if (jobState === 'failed') {
-      AppLogger.warn('Job cancelled - job failed', {
+      serverLogger.warn('Job cancelled - job failed', {
         component: 'Worker',
         action: 'CheckJobStatus',
         jobId: job.id,
@@ -65,7 +65,7 @@ indexingQueue.process('start-indexing', async (job) => {
     
     // Check if job was cancelled
     if (!await indexingQueue.getJob(job.id)) {
-      AppLogger.warn('Job cancelled during table initialization', {
+      serverLogger.warn('Job cancelled during table initialization', {
         component: 'Worker',
         action: 'CheckJobStatus',
         jobId: job.id
@@ -74,26 +74,52 @@ indexingQueue.process('start-indexing', async (job) => {
     }
     
     // Start indexing
-    const webhook = await heliusService.createWebhook({
-      accountAddresses: config.filters.accounts || [],
-      programIds: config.filters.programIds || [],
-      webhookURL: config.webhook.url,
-      webhookSecret: config.webhook.secret
-    });
+    let webhook;
+    if (config.webhook?.enabled) {
+      webhook = await heliusService.createWebhook({
+        accountAddresses: config.filters?.accounts || [],
+        programIds: config.filters?.programIds || [],
+        webhookURL: config.webhook.url,
+        webhookSecret: config.webhook.secret
+      });
 
-    AppLogger.info('Webhook created for job', {
-      component: 'Worker',
-      action: 'CreateWebhook',
-      jobId,
-      webhookId: webhook.webhookId
-    });
+      serverLogger.info('Webhook created for job', {
+        component: 'Worker',
+        action: 'CreateWebhook',
+        jobId,
+        webhookId: webhook.webhookId
+      });
+    } else {
+      serverLogger.info('Starting direct data fetching', {
+        component: 'Worker',
+        action: 'ProcessJob',
+        jobId
+      });
+
+      // Create a database pool for data insertion
+      const pool = await dbService.getPoolForApi(dbConnection);
+
+      try {
+        // Start fetching and processing data
+        await heliusService.startDataFetching(jobId, config, pool);
+
+        serverLogger.info('Data fetching completed', {
+          component: 'Worker',
+          action: 'ProcessJob',
+          jobId
+        });
+      } finally {
+        // Close the database pool
+        await pool.end();
+      }
+    }
 
     // Update progress
     await job.progress(100);
     
     return { status: 'success', webhook };
   } catch (error) {
-    AppLogger.error('Failed to process indexing job', error as Error, {
+    serverLogger.error('Failed to process indexing job', error as Error, {
       component: 'Worker',
       action: 'ProcessJob',
       jobId: job.id
@@ -104,7 +130,7 @@ indexingQueue.process('start-indexing', async (job) => {
 
 // Log job events
 indexingQueue.on('completed', (job) => {
-  AppLogger.info('Job completed', {
+  serverLogger.info('Job completed', {
     component: 'Worker',
     action: 'JobCompleted',
     jobId: job.id
@@ -112,7 +138,7 @@ indexingQueue.on('completed', (job) => {
 });
 
 indexingQueue.on('failed', (job, error) => {
-  AppLogger.error('Job failed', error as Error, {
+  serverLogger.error('Job failed', error as Error, {
     component: 'Worker',
     action: 'JobFailed',
     jobId: job.id
@@ -120,7 +146,7 @@ indexingQueue.on('failed', (job, error) => {
 });
 
 indexingQueue.on('progress', (job, progress) => {
-  AppLogger.info('Job progress updated', {
+  serverLogger.info('Job progress updated', {
     component: 'Worker',
     action: 'JobProgress',
     jobId: job.id,
@@ -130,7 +156,7 @@ indexingQueue.on('progress', (job, progress) => {
 
 // Handle job removal
 indexingQueue.on('removed', (job) => {
-  AppLogger.info('Job removed', {
+  serverLogger.info('Job removed', {
     component: 'Worker',
     action: 'JobRemoved',
     jobId: job.id
@@ -148,7 +174,7 @@ export async function processWebhookJob(job: Job<WebhookJobData>) {
       throw new Error('Invalid job data');
     }
 
-    AppLogger.info('Processing webhook job', {
+    serverLogger.info('Processing webhook job', {
       component: 'Worker',
       action: 'ProcessWebhookJob',
       jobId: job.id,
@@ -160,7 +186,7 @@ export async function processWebhookJob(job: Job<WebhookJobData>) {
     const result = await heliusService.handleWebhookData(webhookId, userId, [payload]);
 
     if (!result.success) {
-      AppLogger.warn('Webhook processing completed with errors', {
+      serverLogger.warn('Webhook processing completed with errors', {
         component: 'Worker',
         action: 'ProcessWebhookJob',
         jobId: job.id,
@@ -168,7 +194,7 @@ export async function processWebhookJob(job: Job<WebhookJobData>) {
         errors: result.errors
       });
     } else {
-      AppLogger.info('Webhook processing completed successfully', {
+      serverLogger.info('Webhook processing completed successfully', {
         component: 'Worker',
         action: 'ProcessWebhookJob',
         jobId: job.id,
@@ -179,7 +205,7 @@ export async function processWebhookJob(job: Job<WebhookJobData>) {
 
     return result;
   } catch (error) {
-    AppLogger.error('Failed to process webhook job', error as Error, {
+    serverLogger.error('Failed to process webhook job', error as Error, {
       component: 'Worker',
       action: 'ProcessWebhookJob',
       jobId: job.id,

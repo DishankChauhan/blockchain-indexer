@@ -4,23 +4,51 @@ import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-hot-toast';
 import IndexingConfigForm from '@/components/IndexingConfigForm';
-import { IndexingConfig } from '@/types';
 import { handleError } from '@/lib/utils/errorHandler';
+
+interface FormConfig {
+  categories: {
+    transactions: boolean;
+    nftEvents: boolean;
+    tokenTransfers: boolean;
+    accountActivity: boolean;
+    programInteractions: boolean;
+    defiTransactions: boolean;
+    governance: boolean;
+  };
+  filters: {
+    programIds: string[];
+    accounts: string[];
+    startSlot?: number;
+    includeMints: boolean;
+    includeMetadata: boolean;
+  };
+  webhook: {
+    enabled: boolean;
+    url?: string;
+    secret?: string;
+  };
+}
 
 export default function ConfigureIndexing() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = async (config: IndexingConfig) => {
+  const handleSubmit = async (config: FormConfig) => {
     try {
       setIsLoading(true);
+
+      const indexingConfig = {
+        ...config,
+        type: 'blockchain',
+      };
 
       const response = await fetch('/api/indexing/configure', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(config),
+        body: JSON.stringify(indexingConfig),
       });
 
       if (!response.ok) {

@@ -4,6 +4,9 @@ import { authOptions } from '@/lib/auth';
 import { AppError } from '@/lib/utils/errorHandling';
 import AppLogger from '@/lib/utils/logger';
 import { DataProcessingService } from '@/lib/services/dataProcessingService';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 export async function POST(request: Request) {
   try {
@@ -22,35 +25,69 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { filters, categories, webhook } = body;
+    const { filters, categories, webhook, dbConnectionId } = body;
 
-    if (!filters || !categories || !webhook) {
+    if (!filters || !categories || !webhook || !dbConnectionId) {
       AppLogger.warn('Invalid configuration request', {
         component: 'IndexingAPI',
         action: 'Configure',
         userId,
         hasFilters: !!filters,
         hasCategories: !!categories,
-        hasWebhook: !!webhook
+        hasWebhook: !!webhook,
+        hasDbConnection: !!dbConnectionId
       });
       throw new AppError('Missing required configuration fields');
     }
 
-    const processingService = DataProcessingService.getInstance();
-    const config = await processingService.configureIndexing(userId, {
-      filters,
-      categories,
-      webhook
+    // Verify database connection exists and belongs to user
+    const dbConnection = await prisma.databaseConnection.findFirst({
+      where: {
+        id: dbConnectionId,
+        userId
+      }
     });
 
-    AppLogger.info('Indexing configuration saved successfully', {
+    if (!dbConnection) {
+      throw new AppError('Database connection not found');
+    }
+
+    // Create indexing job in database
+    const job = await prisma.indexingJob.create({
+      data: {
+        userId,
+        dbConnectionId,
+        type: 'blockchain',
+        status: 'created',
+        progress: 0,
+        config: {
+          filters,
+          categories,
+          webhook
+        }
+      }
+    });
+
+    // Start indexing process
+    const processingService = DataProcessingService.getInstance();
+    await processingService.startIndexing(job.id, {
+      type: 'realtime',
+      filters: {
+        programId: filters.programIds?.[0],
+        account: filters.accounts?.[0]
+      },
+      transformations: [],
+      aggregations: []
+    });
+
+    AppLogger.info('Indexing configuration saved and started successfully', {
       component: 'IndexingAPI',
       action: 'Configure',
       userId,
-      configId: config.id
+      jobId: job.id
     });
 
-    return NextResponse.json(config);
+    return NextResponse.json(job);
   } catch (error) {
     AppLogger.error('Failed to save indexing configuration', error as Error, {
       component: 'IndexingAPI',
@@ -64,5 +101,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: statusCode });
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  } finally {
+    await prisma.$disconnect();
   }
 } 

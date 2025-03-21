@@ -1,7 +1,8 @@
 import { Pool, PoolClient } from 'pg';
-import { logError, logInfo } from '../utils/serverLogger';
-import { AppError } from '../utils/errorHandling';
+import { logError, logInfo } from '@/lib/utils/serverLogger';
+import { AppError } from '@/lib/utils/errorHandling';
 import { HeliusWebhookData } from '../types/helius';
+import { RateLimiter } from 'limiter';
 
 export interface LendingToken {
   protocolName: string;
@@ -38,17 +39,39 @@ export interface LendingProtocolEvent {
   rawData: any;
 }
 
+export interface LendingRate {
+  tokenMint: string;
+  tokenName: string;
+  protocol: string;
+  supplyRate: number;
+  borrowRate: number;
+  totalSupply: number;
+  totalBorrow: number;
+  utilization: number;
+  timestamp: Date;
+  signature: string;
+  rawData: any;
+}
+
 export class LendingService {
-  private static instance: LendingService;
-  private readonly protocolPrograms: Map<string, string>;
+  private static instance: LendingService | null = null;
+  private readonly baseUrl: string;
+  private readonly rateLimiter: RateLimiter;
+  private readonly supportedProtocols: Map<string, string>;
 
   private constructor() {
+    this.baseUrl = process.env.HELIUS_API_URL || 'https://api.helius.xyz/v0';
+    this.rateLimiter = new RateLimiter({
+      tokensPerInterval: 50,
+      interval: 'second',
+      fireImmediately: true
+    });
     // Initialize known lending protocol program IDs
-    this.protocolPrograms = new Map([
+    this.supportedProtocols = new Map([
       ['Port7uDYB3wk6GJAw4KT1WpTeMtSu9bTcChBHkX2LfR', 'Port Finance'],
       ['So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo', 'Solend'],
-      ['MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA', 'Marginfi'],
-      ['4UpD2fh7xH3VP9QQaXtsS1YY3bxzWhtfpks7FatyKvdY', 'Jet Protocol']
+      ['MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA', 'Mango Markets'],
+      ['LendZqTs7gn5CTSJU1jWKhKuVpjJGom45nnwPb2AMTi', 'Larix']
     ]);
   }
 
@@ -59,244 +82,332 @@ export class LendingService {
     return LendingService.instance;
   }
 
-  public async processLendingEvent(
-    transaction: HeliusWebhookData,
-    client: Pool | PoolClient
-  ): Promise<void> {
+  public async fetchAndStoreData(dbPool: Pool): Promise<void> {
     try {
-      // Check if this is a lending protocol transaction
-      const protocolId = this.getProtocolId(transaction);
-      if (!protocolId) {
-        return;
-      }
-
-      // Extract lending events from the transaction
-      const lendingEvents = this.extractLendingEvents(transaction);
-      if (!lendingEvents.length) {
-        return;
-      }
-
-      logInfo('Processing lending events', {
+      logInfo('Starting lending data fetch', {
         component: 'LendingService',
-        action: 'processLendingEvent',
-        signature: transaction.signature,
-        eventCount: lendingEvents.length
+        action: 'fetchAndStoreData'
       });
 
-      for (const event of lendingEvents) {
-        await this.upsertLendingData(event, client);
+      const apiKey = process.env.HELIUS_API_KEY;
+      if (!apiKey) {
+        throw new AppError('HELIUS_API_KEY not found in environment');
       }
+
+      const lastProcessed = await this.getLastProcessedTimestamp(dbPool);
+      const currentTime = Math.floor(Date.now() / 1000);
+      const batchSize = 100;
+      let startTime = lastProcessed || (currentTime - 24 * 60 * 60);
+
+      while (startTime < currentTime) {
+        await this.rateLimiter.removeTokens(1);
+        const endTime = Math.min(startTime + 3600, currentTime);
+
+        const response = await fetch(`${this.baseUrl}/program-events`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            query: {
+              programs: Array.from(this.supportedProtocols.keys()),
+              timeStart: startTime,
+              timeEnd: endTime,
+              types: ['LENDING_RATE_UPDATE', 'RESERVE_UPDATE']
+            },
+            options: { limit: batchSize }
+          })
+        });
+
+        if (!response.ok) {
+          throw new AppError(`Failed to fetch lending events: ${response.statusText}`);
+        }
+
+        const events = await response.json();
+        const client = await dbPool.connect();
+
+        try {
+          await client.query('BEGIN');
+
+          for (const event of events) {
+            if (this.isValidLendingEvent(event)) {
+              const rate = this.extractLendingRate(event);
+              if (rate) {
+                await this.insertLendingRate(rate, client);
+              }
+            }
+          }
+
+          await client.query(`
+            INSERT INTO indexer_state (key, value, updated_at)
+            VALUES ('lending_rates_last_processed', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET
+              value = EXCLUDED.value,
+              updated_at = EXCLUDED.updated_at
+          `, [endTime.toString()]);
+
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+
+        startTime = endTime;
+
+        logInfo('Processed lending rate batch', {
+          component: 'LendingService',
+          action: 'fetchAndStoreData',
+          startTime,
+          endTime,
+          eventsProcessed: events.length
+        });
+      }
+
+      logInfo('Completed lending data fetch', {
+        component: 'LendingService',
+        action: 'fetchAndStoreData'
+      });
     } catch (error) {
-      logError('Failed to process lending event', error as Error, {
+      logError('Failed to fetch and store lending data', error as Error, {
         component: 'LendingService',
-        action: 'processLendingEvent',
-        signature: transaction.signature
+        action: 'fetchAndStoreData'
       });
-      throw error;
+      throw new AppError('Failed to fetch and store lending data');
     }
   }
 
-  public async getAvailableTokens(
-    client: Pool | PoolClient,
-    options?: {
-      protocolName?: string;
-      minLiquidity?: number;
-      maxBorrowRate?: number;
-    }
-  ): Promise<LendingToken[]> {
+  private async getLastProcessedTimestamp(dbPool: Pool): Promise<number | null> {
     try {
-      let query = 'SELECT * FROM available_lending_tokens WHERE 1=1';
-      const params: any[] = [];
-
-      if (options?.protocolName) {
-        params.push(options.protocolName);
-        query += ` AND protocol_name = $${params.length}`;
-      }
-
-      if (options?.minLiquidity) {
-        params.push(options.minLiquidity);
-        query += ` AND available_liquidity >= $${params.length}`;
-      }
-
-      if (options?.maxBorrowRate) {
-        params.push(options.maxBorrowRate);
-        query += ` AND borrow_rate <= $${params.length}`;
-      }
-
-      query += ' ORDER BY borrow_rate ASC';
-
-      const result = await client.query(query, params);
-
-      return result.rows.map(row => ({
-        protocolName: row.protocol_name,
-        poolName: row.pool_name,
-        tokenSymbol: row.token_symbol,
-        tokenName: row.token_name,
-        mintAddress: row.mint_address,
-        decimals: row.decimals,
-        borrowRate: parseFloat(row.borrow_rate),
-        supplyRate: parseFloat(row.supply_rate),
-        totalSupply: parseFloat(row.total_supply),
-        availableLiquidity: parseFloat(row.available_liquidity),
-        borrowedAmount: parseFloat(row.borrowed_amount),
-        utilizationRate: parseFloat(row.utilization_rate),
-        collateralFactor: parseFloat(row.collateral_factor),
-        lastUpdated: new Date(row.last_updated)
-      }));
+      const result = await dbPool.query(`
+        SELECT value::bigint as timestamp
+        FROM indexer_state
+        WHERE key = 'lending_rates_last_processed'
+      `);
+      return result.rows[0]?.timestamp || null;
     } catch (error) {
-      logError('Failed to get available tokens', error as Error, {
+      logError('Failed to get last processed timestamp', error as Error, {
         component: 'LendingService',
-        action: 'getAvailableTokens'
+        action: 'getLastProcessedTimestamp'
       });
-      throw new AppError('Failed to get available tokens');
+      return null;
     }
   }
 
-  private async upsertLendingData(
-    event: LendingProtocolEvent,
-    client: Pool | PoolClient
-  ): Promise<void> {
+  private isValidLendingEvent(event: any): boolean {
+    return (
+      (event.type === 'LENDING_RATE_UPDATE' || event.type === 'RESERVE_UPDATE') &&
+      event.tokenData?.mint &&
+      event.signature &&
+      event.timestamp
+    );
+  }
+
+  private extractLendingRate(event: any): LendingRate | null {
     try {
-      // Get or create protocol
-      const protocolResult = await client.query(
-        'SELECT id FROM lending_protocols WHERE program_id = $1',
-        [event.protocolId]
-      );
-      const protocolId = protocolResult.rows[0].id;
+      const protocol = this.getProtocol(event.accountData);
+      if (!protocol) return null;
 
-      // Get or create pool
-      const poolResult = await client.query(
-        `INSERT INTO lending_pools (protocol_id, pool_address, name)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (protocol_id, pool_address)
-         DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-         RETURNING id`,
-        [protocolId, event.poolAddress, event.poolAddress]
-      );
-      const poolId = poolResult.rows[0].id;
+      const reserveData = event.data?.reserve || event.data;
+      if (!this.isValidReserveData(reserveData)) return null;
 
-      // Get or create token
-      const tokenResult = await client.query(
-        `INSERT INTO lending_tokens (
-          pool_id, mint_address, token_symbol, token_name, decimals
-        ) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (pool_id, mint_address)
-        DO UPDATE SET
-          token_symbol = EXCLUDED.token_symbol,
-          token_name = EXCLUDED.token_name,
-          decimals = EXCLUDED.decimals,
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING id`,
-        [
-          poolId,
-          event.tokenMint,
-          event.tokenSymbol,
-          event.tokenName,
-          event.decimals
-        ]
-      );
-      const tokenId = tokenResult.rows[0].id;
+      // Calculate rates and utilization
+      const supplyRate = this.calculateSupplyRate(reserveData);
+      const borrowRate = this.calculateBorrowRate(reserveData);
+      const utilization = this.calculateUtilization(reserveData);
 
-      // Insert rates
-      await client.query(
-        `INSERT INTO lending_rates (
-          token_id,
-          borrow_rate,
-          supply_rate,
-          total_supply,
-          available_liquidity,
-          borrowed_amount,
-          utilization_rate,
-          collateral_factor,
-          timestamp,
-          raw_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          tokenId,
-          event.borrowRate,
-          event.supplyRate,
-          event.totalSupply,
-          event.availableLiquidity,
-          event.borrowedAmount,
-          event.utilizationRate,
-          event.collateralFactor,
-          event.timestamp,
-          event.rawData
-        ]
-      );
-
-      logInfo('Processed lending data', {
-        component: 'LendingService',
-        action: 'upsertLendingData',
-        tokenMint: event.tokenMint,
-        protocolId: event.protocolId
-      });
+      return {
+        tokenMint: event.tokenData.mint,
+        tokenName: event.tokenData.name || 'Unknown',
+        protocol,
+        supplyRate,
+        borrowRate,
+        totalSupply: reserveData.totalSupply || 0,
+        totalBorrow: reserveData.totalBorrow || 0,
+        utilization,
+        timestamp: new Date(event.timestamp * 1000),
+        signature: event.signature,
+        rawData: event.raw
+      };
     } catch (error) {
-      logError('Failed to upsert lending data', error as Error, {
+      logError('Failed to extract lending rate', error as Error, {
         component: 'LendingService',
-        action: 'upsertLendingData',
-        tokenMint: event.tokenMint
+        action: 'extractLendingRate',
+        eventSignature: event.signature
       });
-      throw error;
+      return null;
     }
   }
 
-  private getProtocolId(transaction: HeliusWebhookData): string | null {
-    // Check program interactions to determine protocol
-    for (const account of transaction.accountData) {
-      if (this.protocolPrograms.has(account.program)) {
-        return account.program;
+  private getProtocol(accountData: any[]): string | null {
+    for (const account of accountData || []) {
+      const protocol = this.supportedProtocols.get(account.program);
+      if (protocol) {
+        return protocol;
       }
     }
     return null;
   }
 
-  private extractLendingEvents(transaction: HeliusWebhookData): LendingProtocolEvent[] {
-    const events: LendingProtocolEvent[] = [];
+  private isValidReserveData(data: any): boolean {
+    return data && (
+      (typeof data.totalSupply === 'number' || typeof data.totalSupply === 'string') &&
+      (typeof data.totalBorrow === 'number' || typeof data.totalBorrow === 'string')
+    );
+  }
 
-    // This is a simplified example. In a real implementation, you would:
-    // 1. Parse the transaction instructions from accountData
-    // 2. Decode the instruction data based on the protocol's IDL
-    // 3. Extract relevant lending pool and token information
-    // 4. Calculate rates and amounts
-
-    // For each protocol, implement specific parsing logic
-    const protocolId = this.getProtocolId(transaction);
-    if (!protocolId) {
-      return events;
+  private calculateSupplyRate(reserveData: any): number {
+    try {
+      // Different protocols might store rates differently
+      // This is a simplified calculation
+      const baseRate = Number(reserveData.supplyRate || reserveData.depositRate || 0);
+      return baseRate / 100; // Convert to decimal
+    } catch (error) {
+      logError('Failed to calculate supply rate', error as Error, {
+        component: 'LendingService',
+        action: 'calculateSupplyRate'
+      });
+      return 0;
     }
+  }
 
-    // Example parsing for Solend (you would need to implement similar logic for other protocols)
-    if (protocolId === 'So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo') {
-      // Look for reserve updates in accountData
-      const reserveAccounts = transaction.accountData.filter(
-        acc => acc.type === 'reserve' || acc.type === 'lendingMarket'
-      );
+  private calculateBorrowRate(reserveData: any): number {
+    try {
+      // Different protocols might store rates differently
+      // This is a simplified calculation
+      const baseRate = Number(reserveData.borrowRate || 0);
+      return baseRate / 100; // Convert to decimal
+    } catch (error) {
+      logError('Failed to calculate borrow rate', error as Error, {
+        component: 'LendingService',
+        action: 'calculateBorrowRate'
+      });
+      return 0;
+    }
+  }
 
-      for (const account of reserveAccounts) {
-        const data = account.data as Record<string, any>;
-        if (data.liquidityMint) {
-          events.push({
-            protocolId,
-            poolAddress: account.account,
-            tokenMint: data.liquidityMint,
-            tokenSymbol: data.symbol || 'UNKNOWN',
-            tokenName: data.name || 'Unknown Token',
-            decimals: data.decimals || 9,
-            borrowRate: data.borrowRate || 0,
-            supplyRate: data.supplyRate || 0,
-            totalSupply: data.totalSupply || 0,
-            availableLiquidity: data.availableLiquidity || 0,
-            borrowedAmount: data.borrowedAmount || 0,
-            utilizationRate: data.utilizationRate || 0,
-            collateralFactor: data.collateralFactor || 0,
-            timestamp: new Date(transaction.timestamp),
-            rawData: data
-          });
-        }
+  private calculateUtilization(reserveData: any): number {
+    try {
+      const totalSupply = Number(reserveData.totalSupply || 0);
+      const totalBorrow = Number(reserveData.totalBorrow || 0);
+
+      if (totalSupply === 0) return 0;
+      return totalBorrow / totalSupply;
+    } catch (error) {
+      logError('Failed to calculate utilization', error as Error, {
+        component: 'LendingService',
+        action: 'calculateUtilization'
+      });
+      return 0;
+    }
+  }
+
+  public async processLendingEvent(
+    event: HeliusWebhookData,
+    client: Pool | PoolClient
+  ): Promise<void> {
+    try {
+      if (!this.isValidLendingEvent(event)) {
+        return;
       }
-    }
 
-    return events;
+      const rate = this.extractLendingRate(event);
+      if (!rate) {
+        return;
+      }
+
+      if (client instanceof Pool) {
+        const poolClient = await client.connect();
+        try {
+          await poolClient.query('BEGIN');
+          await this.insertLendingRate(rate, poolClient);
+          await poolClient.query('COMMIT');
+        } catch (error) {
+          await poolClient.query('ROLLBACK');
+          throw error;
+        } finally {
+          poolClient.release();
+        }
+      } else {
+        await this.insertLendingRate(rate, client);
+      }
+
+      logInfo('Processed lending rate event', {
+        component: 'LendingService',
+        action: 'processLendingEvent',
+        signature: event.signature,
+        tokenMint: rate.tokenMint,
+        protocol: rate.protocol
+      });
+    } catch (error) {
+      logError('Failed to process lending event', error as Error, {
+        component: 'LendingService',
+        action: 'processLendingEvent',
+        signature: event.signature
+      });
+      throw new AppError('Failed to process lending event');
+    }
+  }
+
+  private async insertLendingRate(rate: LendingRate, client: Pool | PoolClient): Promise<void> {
+    await client.query(`
+      INSERT INTO lending_rates (
+        signature,
+        token_mint,
+        token_name,
+        protocol,
+        supply_rate,
+        borrow_rate,
+        total_supply,
+        total_borrow,
+        utilization,
+        timestamp,
+        raw_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT (signature) DO UPDATE SET
+        supply_rate = EXCLUDED.supply_rate,
+        borrow_rate = EXCLUDED.borrow_rate,
+        total_supply = EXCLUDED.total_supply,
+        total_borrow = EXCLUDED.total_borrow,
+        utilization = EXCLUDED.utilization,
+        raw_data = EXCLUDED.raw_data
+    `, [
+      rate.signature,
+      rate.tokenMint,
+      rate.tokenName,
+      rate.protocol,
+      rate.supplyRate,
+      rate.borrowRate,
+      rate.totalSupply,
+      rate.totalBorrow,
+      rate.utilization,
+      rate.timestamp,
+      rate.rawData
+    ]);
+  }
+
+  public async getCurrentRates(tokenMint: string, dbPool: Pool): Promise<any> {
+    try {
+      const result = await dbPool.query(`
+        SELECT * FROM current_lending_rates
+        WHERE token_mint = $1
+        ORDER BY protocol
+      `, [tokenMint]);
+
+      return result.rows;
+    } catch (error) {
+      logError('Failed to get current rates', error as Error, {
+        component: 'LendingService',
+        action: 'getCurrentRates',
+        tokenMint
+      });
+      throw error;
+    }
+  }
+
+  public async cleanup(): Promise<void> {
+    LendingService.instance = null;
   }
 } 

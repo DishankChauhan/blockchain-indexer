@@ -48,6 +48,15 @@ export interface HeliusWebhookData {
   }>;
   sourceAddress: string;
   status: 'success' | 'failed';
+  nft?: {
+    mint: string;
+    name?: string;
+    collection?: string;
+  };
+  amount?: number;
+  seller?: string;
+  buyer?: string;
+  raw: Record<string, unknown>;
 }
 
 export interface HeliusWebhookRequest {

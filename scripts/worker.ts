@@ -1,7 +1,7 @@
 import '../src/lib/queue/worker';
-import AppLogger from '../src/lib/utils/logger';
+import WorkerLogger from '../src/lib/utils/workerLogger';
 
-AppLogger.info('Worker process started', {
+WorkerLogger.info('Worker process started', {
   component: 'WorkerScript',
   action: 'Initialize',
   pid: process.pid

@@ -27,6 +27,7 @@ export async function POST(request: Request) {
     // Test the connection first
     const dbService = DatabaseService.getInstance();
     const isValid = await dbService.testConnection({
+      name: `${database}@${host}:${port}`,
       host,
       port,
       database,
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
         port,
         database,
         username,
-        password: await dbService.encryptPassword(password),
+        password,
         status: 'active'
       },
       select: {

@@ -81,7 +81,9 @@ export default function DataBrowserPage() {
               onValueChange={setSelectedTable}
             >
               <SelectTrigger className="w-[250px]">
-                <SelectValue placeholder="Select a table to view" />
+                <SelectValue>
+                  <span className="text-gray-500">Select a table to view</span>
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {AVAILABLE_TABLES.map((table) => (

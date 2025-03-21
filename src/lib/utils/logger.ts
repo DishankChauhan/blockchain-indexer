@@ -3,6 +3,15 @@ import path from 'path';
 
 const logDir = path.join(process.cwd(), 'logs');
 
+interface LogMetadata {
+  component?: string;
+  action?: string;
+  userId?: string;
+  message?: string;
+  error?: Error;
+  [key: string]: any;
+}
+
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
@@ -30,17 +39,17 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 const AppLogger = {
-  info: (message: string, meta?: Record<string, any>) => {
-    logger.info(message, meta);
+  info: (message: string, metadata?: LogMetadata) => {
+    logger.info(message, metadata);
   },
-  error: (message: string, error?: Error, meta?: Record<string, any>) => {
-    logger.error(message, { error: error?.message, stack: error?.stack, ...meta });
+  error: (message: string, error: Error | null, metadata?: LogMetadata) => {
+    logger.error(message, { ...metadata, error });
   },
-  warn: (message: string, meta?: Record<string, any>) => {
-    logger.warn(message, meta);
+  warn: (message: string, metadata?: LogMetadata) => {
+    logger.warn(message, metadata);
   },
-  debug: (message: string, meta?: Record<string, any>) => {
-    logger.debug(message, meta);
+  debug: (message: string, metadata?: LogMetadata) => {
+    logger.debug(message, metadata);
   }
 };
 

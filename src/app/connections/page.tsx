@@ -59,7 +59,7 @@ export default function ConnectionsPage() {
       setConnections(data || []);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load connections';
-      clientLogger.error('Failed to load connections', error instanceof Error ? error : undefined, {
+      clientLogger.error('Failed to load connections', error instanceof Error ? error : null, {
         component: 'ConnectionsPage',
         action: 'LoadConnections',
         userId: session?.user?.id
@@ -102,7 +102,7 @@ export default function ConnectionsPage() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create connection';
-      clientLogger.error('Failed to create connection', error instanceof Error ? error : undefined, {
+      clientLogger.error('Failed to create connection', error instanceof Error ? error : null, {
         component: 'ConnectionsPage',
         action: 'CreateConnection',
         userId: session?.user?.id
@@ -134,7 +134,7 @@ export default function ConnectionsPage() {
       await loadConnections();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Connection test failed';
-      clientLogger.error('Failed to test connection', error instanceof Error ? error : undefined, {
+      clientLogger.error('Failed to test connection', error instanceof Error ? error : null, {
         component: 'ConnectionsPage',
         action: 'TestConnection',
         connectionId,
@@ -165,7 +165,7 @@ export default function ConnectionsPage() {
       await loadConnections();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to remove connection';
-      clientLogger.error('Failed to remove connection', error instanceof Error ? error : undefined, {
+      clientLogger.error('Failed to remove connection', error instanceof Error ? error : null, {
         component: 'ConnectionsPage',
         action: 'RemoveConnection',
         connectionId,

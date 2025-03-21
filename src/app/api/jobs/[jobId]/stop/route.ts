@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { logError, logInfo } from '@/lib/utils/serverLogger';
+import { logError } from '@/lib/utils/serverLogger';
+import indexingQueue from '@/lib/queue/worker';
 
 export async function POST(
   request: Request,
@@ -10,13 +11,14 @@ export async function POST(
 ) {
   try {
     const session = await getServerSession(authOptions);
+    
     if (!session?.user?.id) {
       return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const { jobId } = params;
+    const jobId = params.jobId;
 
-    // Verify job exists and belongs to user
+    // Get the job from the database
     const job = await prisma.indexingJob.findFirst({
       where: {
         id: jobId,
@@ -25,47 +27,35 @@ export async function POST(
     });
 
     if (!job) {
-      return NextResponse.json(
-        { error: 'Job not found' },
-        { status: 404 }
-      );
+      return new NextResponse('Job not found', { status: 404 });
     }
 
-    // Check if job is running
-    if (job.status !== 'running') {
-      return NextResponse.json(
-        { error: 'Job is not running' },
-        { status: 400 }
-      );
+    // Remove job from the queue
+    const queuedJob = await indexingQueue.getJob(jobId);
+    if (queuedJob) {
+      await queuedJob.remove();
     }
 
-    // Update job status
-    const updatedJob = await prisma.indexingJob.update({
-      where: {
-        id: jobId
-      },
-      data: {
+    // Update job status in database
+    await prisma.indexingJob.update({
+      where: { id: job.id },
+      data: { 
         status: 'stopped',
-        updatedAt: new Date()
+        progress: 0
       }
     });
 
-    logInfo('Successfully stopped job', {
-      component: 'JobsAPI',
-      action: 'Stop',
-      userId: session.user.id,
-      jobId
-    });
-
-    return NextResponse.json(updatedJob);
+    return NextResponse.json({ success: true });
   } catch (error) {
     logError('Failed to stop job', error as Error, {
-      component: 'JobsAPI',
-      action: 'Stop'
+      component: 'JobAPI',
+      action: 'StopJob'
     });
-    return NextResponse.json(
-      { error: 'Failed to stop job' },
-      { status: 500 }
-    );
+    return NextResponse.json({ 
+      success: false,
+      error: 'Failed to stop job'
+    }, { 
+      status: 500 
+    });
   }
 } 

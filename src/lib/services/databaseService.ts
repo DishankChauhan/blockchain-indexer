@@ -4,10 +4,17 @@ import { DatabaseCredentials } from '@/types';
 import prisma from '@/lib/db';
 import { logError, logInfo } from '@/lib/utils/serverLogger';
 import { SecretsManager } from '@/lib/utils/secrets';
+import crypto from 'crypto';
 
 export class DatabaseService {
   public async initializeTables(dbConnection: DatabaseCredentials, categories: { [key: string]: boolean }): Promise<void> {
     try {
+      logInfo('Initializing tables', {
+        component: 'DatabaseService',
+        action: 'initializeTables',
+        categories: JSON.stringify(categories)
+      });
+
       // Create a temporary pool for table initialization
       const pool = await this.createPool(dbConnection);
 
@@ -52,133 +59,6 @@ export class DatabaseService {
             CREATE INDEX IF NOT EXISTS idx_nft_events_signature ON nft_events(signature);
             CREATE INDEX IF NOT EXISTS idx_nft_events_mint ON nft_events(mint_address);
             CREATE INDEX IF NOT EXISTS idx_nft_events_timestamp ON nft_events(timestamp);
-          `);
-
-          // Add NFT bids table
-          await client.query(`
-            CREATE TABLE IF NOT EXISTS nft_bids (
-              id SERIAL PRIMARY KEY,
-              signature VARCHAR(100) NOT NULL,
-              mint_address TEXT NOT NULL,
-              bidder_address TEXT NOT NULL,
-              bid_amount NUMERIC NOT NULL,
-              marketplace TEXT NOT NULL,
-              currency TEXT NOT NULL,
-              status TEXT NOT NULL,
-              expiry_time TIMESTAMP,
-              timestamp TIMESTAMP NOT NULL,
-              raw_data JSONB NOT NULL,
-              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              UNIQUE(mint_address, bidder_address, marketplace)
-            );
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_mint ON nft_bids(mint_address);
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_bidder ON nft_bids(bidder_address);
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_status ON nft_bids(status);
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_marketplace ON nft_bids(marketplace);
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_timestamp ON nft_bids(timestamp);
-
-            -- Create a view for active bids
-            CREATE OR REPLACE VIEW active_nft_bids AS
-            SELECT 
-              mint_address,
-              marketplace,
-              currency,
-              COUNT(*) as total_bids,
-              MIN(bid_amount) as min_bid,
-              MAX(bid_amount) as max_bid,
-              AVG(bid_amount) as avg_bid,
-              json_agg(
-                json_build_object(
-                  'bidder', bidder_address,
-                  'amount', bid_amount,
-                  'timestamp', timestamp
-                )
-                ORDER BY bid_amount DESC
-              ) as bids
-            FROM nft_bids
-            WHERE status = 'active'
-            AND (expiry_time IS NULL OR expiry_time > NOW())
-            GROUP BY mint_address, marketplace, currency;
-
-            -- Create NFT prices table
-            CREATE TABLE IF NOT EXISTS nft_prices (
-              id SERIAL PRIMARY KEY,
-              signature VARCHAR(100) NOT NULL,
-              mint_address TEXT NOT NULL,
-              price_type TEXT NOT NULL,
-              price NUMERIC NOT NULL,
-              marketplace TEXT NOT NULL,
-              currency TEXT NOT NULL,
-              seller_address TEXT,
-              status TEXT NOT NULL,
-              expiry_time TIMESTAMP,
-              timestamp TIMESTAMP NOT NULL,
-              raw_data JSONB NOT NULL,
-              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              UNIQUE(mint_address, marketplace, seller_address)
-            );
-            CREATE INDEX IF NOT EXISTS idx_nft_prices_mint ON nft_prices(mint_address);
-            CREATE INDEX IF NOT EXISTS idx_nft_prices_marketplace ON nft_prices(marketplace);
-            CREATE INDEX IF NOT EXISTS idx_nft_prices_status ON nft_prices(status);
-            CREATE INDEX IF NOT EXISTS idx_nft_prices_timestamp ON nft_prices(timestamp);
-
-            -- Create a view for current NFT prices
-            CREATE OR REPLACE VIEW current_nft_prices AS
-            WITH latest_sales AS (
-              SELECT 
-                mint_address,
-                marketplace,
-                currency,
-                price,
-                timestamp
-              FROM nft_events
-              WHERE event_type = 'NFT_SALE'
-              AND timestamp >= NOW() - INTERVAL '30 days'
-            ),
-            active_listings AS (
-              SELECT 
-                mint_address,
-                marketplace,
-                currency,
-                price,
-                seller_address,
-                timestamp
-              FROM nft_prices
-              WHERE status = 'active'
-              AND price_type = 'listing'
-              AND (expiry_time IS NULL OR expiry_time > NOW())
-            )
-            SELECT 
-              p.mint_address,
-              json_agg(
-                DISTINCT jsonb_build_object(
-                  'marketplace', p.marketplace,
-                  'currency', p.currency,
-                  'listPrice', p.price,
-                  'seller', p.seller_address,
-                  'listTimestamp', p.timestamp,
-                  'lastSalePrice', (
-                    SELECT s.price
-                    FROM latest_sales s
-                    WHERE s.mint_address = p.mint_address
-                    AND s.marketplace = p.marketplace
-                    ORDER BY s.timestamp DESC
-                    LIMIT 1
-                  ),
-                  'lastSaleTimestamp', (
-                    SELECT s.timestamp
-                    FROM latest_sales s
-                    WHERE s.mint_address = p.mint_address
-                    AND s.marketplace = p.marketplace
-                    ORDER BY s.timestamp DESC
-                    LIMIT 1
-                  )
-                )
-              ) as prices
-            FROM active_listings p
-            GROUP BY p.mint_address;
           `);
         }
 
@@ -444,18 +324,83 @@ export class DatabaseService {
           `);
         }
 
+        // Create NFT bids table
+        if (categories.nftBids) {
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS nft_bids (
+              id SERIAL PRIMARY KEY,
+              nft_address TEXT NOT NULL,
+              bid_amount NUMERIC NOT NULL,
+              bidder_address TEXT NOT NULL,
+              marketplace TEXT NOT NULL,
+              timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              expires_at TIMESTAMP,
+              status TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_nft_bids_address ON nft_bids(nft_address);
+          `);
+        }
+
+        // Create NFT prices table
+        if (categories.nftPrices) {
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS nft_prices (
+              id SERIAL PRIMARY KEY,
+              nft_address TEXT NOT NULL,
+              collection_address TEXT NOT NULL,
+              price_sol NUMERIC NOT NULL,
+              price_usd NUMERIC,
+              marketplace TEXT NOT NULL,
+              timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_nft_prices_address ON nft_prices(nft_address);
+          `);
+        }
+
+        // Create token prices table
+        if (categories.tokenPrices) {
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS token_prices (
+              id SERIAL PRIMARY KEY,
+              token_mint TEXT NOT NULL,
+              token_name TEXT NOT NULL,
+              price_usd NUMERIC NOT NULL,
+              volume_24h NUMERIC,
+              platform TEXT NOT NULL,
+              timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_token_prices_token ON token_prices(token_mint);
+          `);
+        }
+
+        // Create token borrowing table
+        if (categories.tokenBorrowing) {
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS lending_rates (
+              id SERIAL PRIMARY KEY,
+              token_mint TEXT NOT NULL,
+              token_name TEXT NOT NULL,
+              supply_apy NUMERIC,
+              borrow_apy NUMERIC,
+              platform TEXT NOT NULL,
+              available_amount NUMERIC NOT NULL,
+              timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_lending_rates_token ON lending_rates(token_mint);
+          `);
+        }
+
         await client.query('COMMIT');
+        logInfo('Tables initialized successfully', {
+          component: 'DatabaseService',
+          action: 'initializeTables'
+        });
       } catch (error) {
         await client.query('ROLLBACK');
-        logError('Failed to initialize tables', error as Error, {
-          component: 'DatabaseService',
-          action: 'initializeTables',
-          categories: JSON.stringify(categories)
-        });
         throw error;
       } finally {
         client.release();
-        await pool.end(); // Clean up the temporary pool
+        await pool.end();
       }
     } catch (error) {
       logError('Failed to initialize tables', error as Error, {
@@ -463,17 +408,21 @@ export class DatabaseService {
         action: 'initializeTables',
         categories: JSON.stringify(categories)
       });
-      throw new AppError('Failed to initialize database tables');
+      throw new AppError('Failed to initialize tables', 500);
     }
   }
 
   private static instance: DatabaseService;
   private connectionPools: Map<string, Pool>;
   private secretsManager: SecretsManager;
+  private encryptionKey: Buffer;
+  private iv: Buffer;
 
   private constructor() {
     this.connectionPools = new Map();
     this.secretsManager = SecretsManager.getInstance();
+    this.encryptionKey = crypto.randomBytes(32);
+    this.iv = crypto.randomBytes(16);
   }
 
   public static getInstance(): DatabaseService {
@@ -658,9 +607,10 @@ export class DatabaseService {
   }
 
   private async encryptPassword(password: string): Promise<string> {
-    const key = `db_password_${Date.now()}`;
-    await this.secretsManager.setSecret(key, password);
-    return key;
+    const cipher = crypto.createCipheriv('aes-256-cbc', this.encryptionKey, this.iv);
+    let encrypted = cipher.update(password, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return encrypted;
   }
 
   private async decryptPassword(key: string): Promise<string> {

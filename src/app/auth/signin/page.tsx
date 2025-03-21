@@ -31,13 +31,13 @@ export default function SignIn() {
         setError(result.error);
         return;
       }
-
       // Redirect to the callbackUrl or dashboard
-      const callbackUrl = searchParams.get('callbackUrl') || '/dashboard';
+      const callbackUrl = searchParams?.get('callbackUrl') || '/dashboard';
       router.push(callbackUrl);
     } catch (err: any) {
       setError(err.message || 'An error occurred during sign in');
     } finally {
+      setIsLoading(false);
       setIsLoading(false);
     }
   };
@@ -117,7 +117,7 @@ export default function SignIn() {
 
           <div className="mt-6 grid grid-cols-2 gap-4">
             <button
-              onClick={() => signIn('github', { callbackUrl: searchParams.get('callbackUrl') || '/dashboard' })}
+              onClick={() => signIn('github', { callbackUrl: searchParams?.get('callbackUrl') || '/dashboard' })}
               className="flex w-full items-center justify-center gap-3 rounded-md bg-[#24292F] px-3 py-1.5 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#24292F]"
             >
               <svg className="h-5 w-5" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20">
@@ -129,9 +129,8 @@ export default function SignIn() {
               </svg>
               <span className="text-sm font-semibold leading-6">GitHub</span>
             </button>
-
             <button
-              onClick={() => signIn('google', { callbackUrl: searchParams.get('callbackUrl') || '/dashboard' })}
+              onClick={() => signIn('google', { callbackUrl: searchParams?.get('callbackUrl') || '/dashboard' })}
               className="flex w-full items-center justify-center gap-3 rounded-md bg-white px-3 py-1.5 text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1D9BF0] ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
             >
               <svg className="h-5 w-5" aria-hidden="true" viewBox="0 0 24 24">

@@ -286,3 +286,13 @@
 {"action":"GET","component":"ConnectionsAPI","error":{"clientVersion":"5.22.0","name":"PrismaClientInitializationError"},"level":"error","message":"Failed to fetch database connections","service":"blockchain-indexer","timestamp":"2025-03-21T13:23:39.969Z"}
 {"error":{},"level":"error","message":"Failed to retrieve secret","service":"blockchain-indexer","timestamp":"2025-03-21T13:28:20.037Z"}
 {"action":"Test","component":"ConnectionsAPI","error":{"isOperational":true,"name":"AppError","statusCode":500},"level":"error","message":"Failed to test database connection","service":"blockchain-indexer","timestamp":"2025-03-21T13:28:20.038Z"}
+{"action":"initializeTables","categories":"{\"nftBids\":true,\"nftPrices\":true,\"tokenPrices\":true,\"tokenBorrowing\":true}","component":"DatabaseService","error":{},"level":"error","message":"Failed to initialize tables","timestamp":"2025-03-21T17:17:48.875Z"}
+{"action":"ProcessJob","component":"Worker","error":{"isOperational":true,"name":"AppError","statusCode":500},"jobId":"1","level":"error","message":"Failed to process indexing job","timestamp":"2025-03-21T17:17:48.877Z"}
+{"action":"JobFailed","component":"Worker","error":{"isOperational":true,"name":"AppError","statusCode":500},"jobId":"1","level":"error","message":"Job failed","timestamp":"2025-03-21T17:17:49.090Z"}
+{"action":"initializeTables","categories":"{\"nftBids\":true,\"nftPrices\":true,\"tokenPrices\":true,\"tokenBorrowing\":true}","component":"DatabaseService","error":{"code":"42703","file":"indexcmds.c","length":102,"line":"1843","name":"error","routine":"ComputeIndexAttrs","severity":"ERROR"},"level":"error","message":"Failed to initialize tables","timestamp":"2025-03-21T17:22:46.520Z"}
+{"action":"ProcessJob","component":"Worker","error":{"isOperational":true,"name":"AppError","statusCode":500},"jobId":"2","level":"error","message":"Failed to process indexing job","timestamp":"2025-03-21T17:22:46.520Z"}
+{"action":"JobFailed","component":"Worker","error":{"isOperational":true,"name":"AppError","statusCode":500},"jobId":"2","level":"error","message":"Job failed","timestamp":"2025-03-21T17:22:46.541Z"}
+{"action":"ProcessJob","component":"Worker","error":{},"jobId":"3","level":"error","message":"Failed to process indexing job","timestamp":"2025-03-21T17:35:47.898Z"}
+{"action":"JobFailed","component":"Worker","error":{},"jobId":"3","level":"error","message":"Job failed","timestamp":"2025-03-21T17:35:47.917Z"}
+{"action":"ProcessJob","component":"Worker","error":{},"jobId":"4","level":"error","message":"Failed to process indexing job","timestamp":"2025-03-21T17:40:47.795Z"}
+{"action":"JobFailed","component":"Worker","error":{},"jobId":"4","level":"error","message":"Job failed","timestamp":"2025-03-21T17:40:47.805Z"}

@@ -48,10 +48,10 @@ export interface IndexingConfig {
     secret?: string;
   };
   categories: {
-    transactions: boolean;
-    nftEvents: boolean;
-    tokenTransfers: boolean;
-    programInteractions: boolean;
+    nftBids: boolean;
+    nftPrices: boolean;
+    tokenPrices: boolean;
+    tokenBorrowing: boolean;
   };
   options?: {
     batchSize?: number;

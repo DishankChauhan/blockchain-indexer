@@ -1,151 +1,131 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ApiClient } from '@/lib/api/apiClient';
-import { handleError } from '@/lib/utils/errorHandling';
+import { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
+import { Card } from '@/components/ui/card';
+import { ApiClient } from '@/lib/api/apiClient';
 
 interface JobMetric {
-  id: string;
-  status: string;
+  jobId: string;
+  jobName: string;
   progress: number;
-  processedCount: number;
-  lastUpdated: string;
-}
-
-interface TimeSeriesData {
-  timestamp: Date;
-  data: any;
+  status: string;
+  startTime: string;
+  endTime?: string;
 }
 
 interface AnalyticsData {
-  jobMetrics: JobMetric[];
-  timeSeriesData: TimeSeriesData[];
+  activeJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  totalTransactions: number;
+  recentJobs: JobMetric[];
 }
 
 interface ApiResponse<T> {
   data: T;
-  status: number;
 }
 
-const LoadingSpinner = () => (
-  <div className="flex items-center justify-center p-8">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-  </div>
-);
-
 export default function AnalyticsPage() {
+  const [data, setData] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<AnalyticsData | null>(null);
 
   useEffect(() => {
-    const loadAnalytics = async () => {
+    async function loadAnalytics() {
       try {
-        setIsLoading(true);
         const apiClient = ApiClient.getInstance();
         const response = await apiClient.get<ApiResponse<AnalyticsData>>('/api/analytics');
         setData(response.data);
       } catch (err) {
-        const error = await handleError(err instanceof Error ? err : new Error('Failed to load analytics'), {
-          component: 'AnalyticsPage',
-          action: 'loadAnalytics'
-        });
-        setError(error.message);
-        toast.error('Failed to load analytics data');
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load analytics data';
+        setError(errorMessage);
+        toast.error(errorMessage);
       } finally {
         setIsLoading(false);
       }
-    };
+    }
 
     loadAnalytics();
   }, []);
 
   if (isLoading) {
-    return <LoadingSpinner />;
+    return <div>Loading...</div>;
   }
 
   if (error) {
-    return (
-      <div className="p-4">
-        <div className="bg-red-50 border-l-4 border-red-400 p-4">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm text-red-700">
-                {error}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <div>Error: {error}</div>;
   }
 
   if (!data) {
-    return (
-      <div className="p-4">
-        <p className="text-gray-500">No analytics data available</p>
-      </div>
-    );
+    return <div>No data available</div>;
   }
 
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-6">Analytics Dashboard</h1>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold">Analytics Dashboard</h1>
       
-      {/* Job Metrics */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Job Metrics</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {data.jobMetrics.map((metric) => (
-            <div key={metric.id} className="bg-white p-4 rounded-lg shadow">
-              <h3 className="font-medium">Job {metric.id}</h3>
-              <p className="text-sm text-gray-500">Status: {metric.status}</p>
-              <p className="text-sm text-gray-500">Progress: {metric.progress}%</p>
-              <p className="text-sm text-gray-500">Processed: {metric.processedCount} items</p>
-              <p className="text-sm text-gray-500">
-                Last Updated: {new Date(metric.lastUpdated).toLocaleString()}
-              </p>
-            </div>
-          ))}
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <div className="p-4">
+            <h2 className="text-lg font-semibold">Active Jobs</h2>
+            <p className="text-3xl">{data.activeJobs}</p>
+          </div>
+        </Card>
+        
+        <Card>
+          <div className="p-4">
+            <h2 className="text-lg font-semibold">Completed Jobs</h2>
+            <p className="text-3xl">{data.completedJobs}</p>
+          </div>
+        </Card>
+        
+        <Card>
+          <div className="p-4">
+            <h2 className="text-lg font-semibold">Failed Jobs</h2>
+            <p className="text-3xl">{data.failedJobs}</p>
+          </div>
+        </Card>
+        
+        <Card>
+          <div className="p-4">
+            <h2 className="text-lg font-semibold">Total Transactions</h2>
+            <p className="text-3xl">{data.totalTransactions}</p>
+          </div>
+        </Card>
       </div>
 
-      {/* Time Series Data */}
-      <div>
-        <h2 className="text-xl font-semibold mb-4">Recent Activity</h2>
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Timestamp
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Details
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {data.timeSeriesData.map((item, index) => (
-                <tr key={index}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {new Date(item.timestamp).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
-                    <pre className="whitespace-pre-wrap">
-                      {JSON.stringify(item.data, null, 2)}
-                    </pre>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="mt-8">
+        <h2 className="text-xl font-semibold mb-4">Recent Jobs</h2>
+        <div className="space-y-4">
+          {data.recentJobs.map((job) => (
+            <Card key={job.jobId}>
+              <div className="p-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-medium">{job.jobName}</h3>
+                  <span className={`px-2 py-1 rounded text-sm ${
+                    job.status === 'completed' ? 'bg-green-100 text-green-800' :
+                    job.status === 'failed' ? 'bg-red-100 text-red-800' :
+                    'bg-blue-100 text-blue-800'
+                  }`}>
+                    {job.status}
+                  </span>
+                </div>
+                <div className="mt-2">
+                  <div className="h-2 bg-gray-200 rounded">
+                    <div
+                      className="h-2 bg-blue-500 rounded"
+                      style={{ width: `${job.progress}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 text-sm text-gray-600">
+                    Started: {new Date(job.startTime).toLocaleString()}
+                    {job.endTime && ` • Ended: ${new Date(job.endTime).toLocaleString()}`}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ))}
         </div>
       </div>
     </div>

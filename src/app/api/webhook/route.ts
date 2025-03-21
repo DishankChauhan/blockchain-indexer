@@ -1,43 +1,38 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { WebhookService } from '@/lib/services/webhookService';
-import { logError, logInfo, logWarn } from '@/lib/utils/serverLogger';
+import { logError, logWarn } from '@/lib/utils/serverLogger';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const body = await req.json();
-    const signature = req.headers.get('x-signature');
-
-    if (!body || !signature) {
-      logWarn('Invalid webhook request', {
-        component: 'WebhookAPI',
-        action: 'POST'
-      });
-      return new NextResponse('Invalid request', { status: 400 });
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const webhookService = WebhookService.getInstance();
-    const isValid = await webhookService.verifySignature(body, signature);
+    const body = await request.json();
+    const signature = request.headers.get('x-signature');
+    const webhookId = request.headers.get('x-webhook-id');
 
-    if (!isValid) {
-      logWarn('Invalid webhook signature', {
+    if (!signature || !webhookId) {
+      logWarn('Missing required webhook components', {
         component: 'WebhookAPI',
-        action: 'POST'
+        action: 'ValidateRequest',
+        hasSignature: !!signature,
+        hasWebhookId: !!webhookId
       });
-      return new NextResponse('Invalid signature', { status: 401 });
+      return NextResponse.json({ error: 'Missing required components' }, { status: 400 });
     }
 
-    await webhookService.handleWebhook(body);
-
-    logInfo('Webhook processed successfully', {
-      component: 'WebhookAPI',
-      action: 'POST'
-    });
+    const webhookService = WebhookService.getInstance(session.user.id);
+    await webhookService.handleWebhookEvent(webhookId, body, signature);
 
     return NextResponse.json({ success: true });
   } catch (error) {
     logError('Failed to process webhook', error as Error, {
       component: 'WebhookAPI',
-      action: 'POST'
+      action: 'ProcessWebhook'
     });
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

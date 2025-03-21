@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "worker": "node scripts/worker.js",
+    "worker": "NODE_ENV=development ts-node -r tsconfig-paths/register --project tsconfig.worker.json src/lib/queue/worker.ts",
+    "worker:build": "tsc --project tsconfig.worker.json",
+    "worker:prod": "node dist/scripts/worker.js",
     "test": "jest"
   },
   "dependencies": {
@@ -38,6 +40,7 @@
     "express": "^4.18.2",
     "framer-motion": "^12.5.0",
     "ioredis": "^5.6.0",
+    "limiter": "^3.0.0",
     "lucide-react": "^0.483.0",
     "next": "^14.2.25",
     "next-auth": "^4.24.11",

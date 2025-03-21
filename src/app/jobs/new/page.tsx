@@ -176,7 +176,14 @@ export default function NewJobPage() {
                     onValueChange={(value) => setConfig(prev => ({ ...prev, dbConnectionId: value }))}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select connection" />
+                      <SelectValue>
+                        {config.dbConnectionId 
+                          ? connections.find(conn => conn.id === config.dbConnectionId)
+                            ? `${connections.find(conn => conn.id === config.dbConnectionId)?.database}@${connections.find(conn => conn.id === config.dbConnectionId)?.host}:${connections.find(conn => conn.id === config.dbConnectionId)?.port}`
+                            : "Select connection"
+                          : "Select connection"
+                        }
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {connections.map((conn) => (

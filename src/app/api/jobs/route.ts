@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     }
 
     // Validate slot range
-    if (startSlot < 0 || endSlot < 0 || startSlot >= endSlot) {
+    if (startSlot < 0 || endSlot < 0 || (endSlot !== 0 && startSlot >= endSlot)) {
       return NextResponse.json(
         { error: 'Invalid slot range' },
         { status: 400 }

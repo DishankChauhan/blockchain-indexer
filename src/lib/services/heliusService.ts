@@ -44,6 +44,10 @@ export class HeliusService {
   private rateLimiter: RateLimiter;
   private circuitBreaker: CircuitBreaker;
   private baseUrl: string;
+  private nftBidService: NFTBidService;
+  private nftPriceService: NFTPriceService;
+  private lendingService: LendingService;
+  private tokenPriceService: TokenPriceService;
 
   private constructor(userId: string) {
     if (!userId) {
@@ -56,6 +60,10 @@ export class HeliusService {
     this.rateLimiter = RateLimiter.getInstance();
     this.circuitBreaker = CircuitBreaker.getInstance();
     this.baseUrl = HELIUS_API_URL;
+    this.nftBidService = NFTBidService.getInstance();
+    this.nftPriceService = NFTPriceService.getInstance();
+    this.lendingService = LendingService.getInstance();
+    this.tokenPriceService = TokenPriceService.getInstance();
   }
 
   public static getInstance(userId: string): HeliusService {
@@ -274,81 +282,79 @@ export class HeliusService {
     try {
       await client.query('BEGIN');
 
-      // Create tables based on enabled categories
-      if (config.categories.transactions) {
+      if (config.categories.nftBids) {
         await client.query(`
-          CREATE TABLE IF NOT EXISTS transactions (
+          CREATE TABLE IF NOT EXISTS nft_bids (
             id SERIAL PRIMARY KEY,
-            signature VARCHAR(100) UNIQUE NOT NULL,
-            slot BIGINT NOT NULL,
-            timestamp TIMESTAMP NOT NULL,
-            success BOOLEAN NOT NULL,
-            fee BIGINT NOT NULL,
-            program_ids TEXT[],
-            raw_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-          );
-          CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
-          CREATE INDEX IF NOT EXISTS idx_transactions_slot ON transactions(slot);
-          CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
-        `);
-      }
-
-      if (config.categories.nftEvents) {
-        await client.query(`
-          CREATE TABLE IF NOT EXISTS nft_events (
-            id SERIAL PRIMARY KEY,
-            signature VARCHAR(100) UNIQUE NOT NULL,
+            signature VARCHAR(100) NOT NULL,
             mint_address TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            price NUMERIC,
-            buyer TEXT,
-            seller TEXT,
+            bidder_address TEXT NOT NULL,
+            bid_amount NUMERIC NOT NULL,
+            marketplace TEXT NOT NULL,
+            status TEXT NOT NULL,
+            expires_at TIMESTAMP,
             timestamp TIMESTAMP NOT NULL,
             raw_data JSONB NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
-          CREATE INDEX IF NOT EXISTS idx_nft_events_signature ON nft_events(signature);
-          CREATE INDEX IF NOT EXISTS idx_nft_events_mint ON nft_events(mint_address);
-          CREATE INDEX IF NOT EXISTS idx_nft_events_timestamp ON nft_events(timestamp);
+          CREATE INDEX IF NOT EXISTS idx_nft_bids_signature ON nft_bids(signature);
+          CREATE INDEX IF NOT EXISTS idx_nft_bids_mint ON nft_bids(mint_address);
         `);
       }
 
-      if (config.categories.tokenTransfers) {
+      if (config.categories.nftPrices) {
         await client.query(`
-          CREATE TABLE IF NOT EXISTS token_transfers (
+          CREATE TABLE IF NOT EXISTS nft_prices (
+            id SERIAL PRIMARY KEY,
+            signature VARCHAR(100) NOT NULL,
+            mint_address TEXT NOT NULL,
+            price NUMERIC NOT NULL,
+            marketplace TEXT NOT NULL,
+            seller_address TEXT,
+            status TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL,
+            raw_data JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_nft_prices_signature ON nft_prices(signature);
+          CREATE INDEX IF NOT EXISTS idx_nft_prices_mint ON nft_prices(mint_address);
+        `);
+      }
+
+      if (config.categories.tokenPrices) {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS token_prices (
             id SERIAL PRIMARY KEY,
             signature VARCHAR(100) NOT NULL,
             token_address TEXT NOT NULL,
-            from_address TEXT NOT NULL,
-            to_address TEXT NOT NULL,
-            amount NUMERIC NOT NULL,
+            price_usd NUMERIC NOT NULL,
+            volume_24h NUMERIC,
+            platform TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             raw_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(signature, token_address)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
-          CREATE INDEX IF NOT EXISTS idx_token_transfers_signature ON token_transfers(signature);
-          CREATE INDEX IF NOT EXISTS idx_token_transfers_token ON token_transfers(token_address);
-          CREATE INDEX IF NOT EXISTS idx_token_transfers_timestamp ON token_transfers(timestamp);
+          CREATE INDEX IF NOT EXISTS idx_token_prices_signature ON token_prices(signature);
+          CREATE INDEX IF NOT EXISTS idx_token_prices_token ON token_prices(token_address);
         `);
       }
 
-      if (config.categories.programInteractions) {
+      if (config.categories.tokenBorrowing) {
         await client.query(`
-          CREATE TABLE IF NOT EXISTS program_interactions (
+          CREATE TABLE IF NOT EXISTS lending_rates (
             id SERIAL PRIMARY KEY,
             signature VARCHAR(100) NOT NULL,
-            program_id TEXT NOT NULL,
-            instruction_data JSONB NOT NULL,
+            token_address TEXT NOT NULL,
+            protocol TEXT NOT NULL,
+            borrow_rate NUMERIC NOT NULL,
+            supply_rate NUMERIC NOT NULL,
+            total_supply NUMERIC NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             raw_data JSONB NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(signature, program_id)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
-          CREATE INDEX IF NOT EXISTS idx_program_interactions_signature ON program_interactions(signature);
-          CREATE INDEX IF NOT EXISTS idx_program_interactions_program ON program_interactions(program_id);
-          CREATE INDEX IF NOT EXISTS idx_program_interactions_timestamp ON program_interactions(timestamp);
+          CREATE INDEX IF NOT EXISTS idx_lending_rates_signature ON lending_rates(signature);
+          CREATE INDEX IF NOT EXISTS idx_lending_rates_token ON lending_rates(token_address);
         `);
       }
 
@@ -387,17 +393,17 @@ export class HeliusService {
       await client.query('BEGIN');
 
       for (const transaction of data) {
-        if (config.categories.transactions) {
-          await this.insertTransaction(client, transaction);
+        if (config.categories.nftBids) {
+          await this.nftBidService.processBidEvent(transaction, pool);
         }
-        if (config.categories.nftEvents && transaction.nftEvents) {
-          await this.insertNFTEvents(client, transaction);
+        if (config.categories.nftPrices) {
+          await this.nftPriceService.processPriceEvent(transaction, pool);
         }
-        if (config.categories.tokenTransfers && transaction.tokenTransfers) {
-          await this.insertTokenTransfers(client, transaction);
+        if (config.categories.tokenPrices) {
+          await this.tokenPriceService.processPriceEvent(transaction, pool);
         }
-        if (config.categories.programInteractions && transaction.programIds) {
-          await this.insertProgramInteractions(client, transaction);
+        if (config.categories.tokenBorrowing) {
+          await this.lendingService.processLendingEvent(transaction, pool);
         }
       }
 
@@ -410,80 +416,52 @@ export class HeliusService {
     }
   }
 
-  private async insertTransaction(client: any, tx: any): Promise<void> {
-    await client.query(
-      `INSERT INTO transactions (
-        signature, slot, timestamp, success, fee, program_ids, raw_data
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (signature) DO NOTHING`,
-      [
-        tx.signature,
-        tx.slot,
-        new Date(tx.timestamp * 1000),
-        tx.success,
-        tx.fee,
-        tx.programIds,
-        tx
-      ]
-    );
-  }
-
-  private async insertNFTEvents(client: any, tx: any): Promise<void> {
-    for (const event of tx.nftEvents) {
-      await client.query(
-        `INSERT INTO nft_events (
-          signature, mint_address, event_type, price, buyer, seller, timestamp, raw_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (signature) DO NOTHING`,
-        [
-          tx.signature,
-          event.mint,
-          event.type,
-          event.amount,
-          event.buyer,
-          event.seller,
-          new Date(tx.timestamp * 1000),
-          event
-        ]
+  private async processNFTTransaction(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
+    try {
+      // Process NFT events
+      const nftEvents = transaction.events.filter(event => 
+        event.type === 'NFT_SALE' || 
+        event.type === 'NFT_LISTING' || 
+        event.type === 'NFT_GLOBAL_LISTING' ||
+        event.type === 'NFT_CANCEL_LISTING' ||
+        event.type === 'BID_PLACED' ||
+        event.type === 'BID_CANCELLED' ||
+        event.type === 'BID_ACCEPTED'
       );
-    }
-  }
 
-  private async insertTokenTransfers(client: any, tx: any): Promise<void> {
-    for (const transfer of tx.tokenTransfers) {
-      await client.query(
-        `INSERT INTO token_transfers (
-          signature, token_address, from_address, to_address, amount, timestamp, raw_data
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (signature, token_address) DO NOTHING`,
-        [
-          tx.signature,
-          transfer.token,
-          transfer.fromAddress,
-          transfer.toAddress,
-          transfer.amount,
-          new Date(tx.timestamp * 1000),
-          transfer
-        ]
-      );
-    }
-  }
+      if (!nftEvents.length) {
+        return;
+      }
 
-  private async insertProgramInteractions(client: any, tx: any): Promise<void> {
-    for (const programId of tx.programIds) {
-      await client.query(
-        `INSERT INTO program_interactions (
-          signature, program_id, instruction_data, timestamp, raw_data
-        ) VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (signature, program_id) DO NOTHING`,
-        [
-          tx.signature,
-          programId,
-          tx.instructions?.filter((i: any) => i.programId === programId) || [],
-          new Date(tx.timestamp * 1000),
-          tx
-        ]
-      );
+      // Get database pool for the connection
+      const pool = await this.dbService.getConnection(connectionId, this.userId);
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        // Process NFT bids
+        const bidService = NFTBidService.getInstance();
+        await bidService.processBidEvent(transaction, pool);
+
+        // Process NFT prices
+        const priceService = NFTPriceService.getInstance();
+        await priceService.processPriceEvent(transaction, pool);
+
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      logError('Failed to process NFT transaction', error as Error, {
+        component: 'HeliusService',
+        action: 'processNFTTransaction',
+        signature: transaction.signature
+      });
+      throw error;
     }
   }
 
@@ -565,83 +543,6 @@ export class HeliusService {
         action: 'handleWebhookData',
         jobId,
         userId
-      });
-      throw error;
-    }
-  }
-
-  private async processNFTTransaction(transaction: HeliusWebhookData, connectionId: string): Promise<void> {
-    try {
-      // Process NFT events
-      const nftEvents = transaction.events.filter(event => 
-        event.type === 'NFT_SALE' || 
-        event.type === 'NFT_LISTING' || 
-        event.type === 'NFT_GLOBAL_LISTING' ||
-        event.type === 'NFT_CANCEL_LISTING' ||
-        event.type === 'BID_PLACED' ||
-        event.type === 'BID_CANCELLED' ||
-        event.type === 'BID_ACCEPTED'
-      );
-
-      if (!nftEvents.length) {
-        return;
-      }
-
-      // Get database pool for the connection
-      const pool = await this.dbService.getConnection(connectionId, this.userId);
-      const client = await pool.connect();
-
-      try {
-        await client.query('BEGIN');
-
-        // Process NFT bids
-        const bidService = NFTBidService.getInstance(pool);
-        await bidService.processBidEvent(transaction, pool);
-
-        // Process NFT prices
-        const priceService = NFTPriceService.getInstance(pool);
-        await priceService.processPriceEvent(transaction, pool);
-
-        // Process other NFT events
-        for (const event of nftEvents) {
-          const eventData = event.data as Record<string, any>;
-          await client.query(
-            `INSERT INTO nft_events (
-              signature,
-              mint_address,
-              event_type,
-              price,
-              buyer,
-              seller,
-              timestamp,
-              raw_data
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (signature) DO NOTHING`,
-            [
-              transaction.signature,
-              eventData.mint || eventData.mintAddress,
-              event.type,
-              eventData.amount || eventData.price || 0,
-              eventData.buyer || eventData.newOwner,
-              eventData.seller || eventData.owner,
-              new Date(transaction.timestamp),
-              event
-            ]
-          );
-        }
-
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
-      }
-    } catch (error) {
-      logError('Failed to process NFT transaction', error as Error, {
-        component: 'HeliusService',
-        action: 'processNFTTransaction',
-        signature: transaction.signature
       });
       throw error;
     }
@@ -830,6 +731,50 @@ export class HeliusService {
         component: 'HeliusService',
         action: 'processGenericTransaction',
         signature: transaction.signature
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Starts fetching and processing data from Helius API
+   */
+  public async startDataFetching(jobId: string, config: IndexingConfig, pool: Pool): Promise<void> {
+    try {
+      logInfo('Starting data fetching', {
+        component: 'HeliusService',
+        action: 'startDataFetching',
+        jobId,
+        categories: JSON.stringify(config.categories)
+      });
+
+      // Process each enabled category
+      if (config.categories.nftBids) {
+        await this.nftBidService.fetchAndStoreData(pool);
+      }
+
+      if (config.categories.nftPrices) {
+        await this.nftPriceService.fetchAndStoreData(pool);
+      }
+
+      if (config.categories.tokenPrices) {
+        await this.tokenPriceService.fetchAndStoreData(pool);
+      }
+
+      if (config.categories.tokenBorrowing) {
+        await this.lendingService.fetchAndStoreData(pool);
+      }
+
+      logInfo('Data fetching completed', {
+        component: 'HeliusService',
+        action: 'startDataFetching',
+        jobId
+      });
+    } catch (error) {
+      logError('Failed to fetch data', error as Error, {
+        component: 'HeliusService',
+        action: 'startDataFetching',
+        jobId
       });
       throw error;
     }

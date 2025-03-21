@@ -57,8 +57,7 @@ export default function WebhooksPage() {
       setWebhooks(data || []);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load webhooks';
-      clientLogger.error('Failed to load webhooks', {
-        error: error as Error,
+      clientLogger.error('Failed to load webhooks', error as Error, {
         component: 'WebhooksPage',
         action: 'LoadWebhooks',
         userId: session?.user?.id
@@ -80,8 +79,7 @@ export default function WebhooksPage() {
       setLogs(data);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load webhook logs';
-      clientLogger.error('Failed to load webhook logs', {
-        error: error as Error,
+      clientLogger.error('Failed to load webhook logs', error as Error, {
         component: 'WebhooksPage',
         action: 'LoadWebhookLogs',
         webhookId,
@@ -127,8 +125,7 @@ export default function WebhooksPage() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create webhook';
-      clientLogger.error('Failed to create webhook', {
-        error: error as Error,
+      clientLogger.error('Failed to create webhook', error as Error, {
         component: 'WebhooksPage',
         action: 'CreateWebhook',
         userId: session?.user?.id
@@ -162,8 +159,7 @@ export default function WebhooksPage() {
       await loadWebhooks();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update webhook';
-      clientLogger.error('Failed to update webhook', {
-        error: error as Error,
+      clientLogger.error('Failed to update webhook', error as Error, {
         component: 'WebhooksPage',
         action: 'UpdateWebhook',
         webhookId,
@@ -198,8 +194,7 @@ export default function WebhooksPage() {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to delete webhook';
-      clientLogger.error('Failed to delete webhook', {
-        error: error as Error,
+      clientLogger.error('Failed to delete webhook', error as Error, {
         component: 'WebhooksPage',
         action: 'DeleteWebhook',
         webhookId,
