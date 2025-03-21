@@ -1,4 +1,5 @@
-import { AppError } from '@/lib/utils/errorHandling';
+import { AppError } from '../utils/errorHandling';
+import clientLogger from '../utils/clientLogger';
 
 type RetryConfig = {
   maxRetries: number;
@@ -10,6 +11,11 @@ type RateLimitConfig = {
   maxRequests: number;
   windowMs: number;
 };
+
+interface ApiResponse<T> {
+  data?: T;
+  error?: string;
+}
 
 export class ApiClient {
   private static instance: ApiClient;
@@ -134,5 +140,37 @@ export class ApiClient {
       },
       endpoint
     );
+  }
+}
+
+export async function apiRequest<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  try {
+    const response = await fetch(endpoint, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+
+    const data: ApiResponse<T> = await response.json();
+
+    if (!response.ok) {
+      throw new AppError(
+        data.error || `API request failed with status ${response.status}`,
+        response.status
+      );
+    }
+
+    return data.data as T;
+  } catch (error) {
+    clientLogger.error('API request failed', error as Error, {
+      endpoint,
+      method: options.method || 'GET'
+    });
+    throw error;
   }
 } 

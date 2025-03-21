@@ -11,6 +11,7 @@ export function DatabaseConnectionForm({
   isLoading: boolean;
 }) {
   const [credentials, setCredentials] = useState<DatabaseCredentials>({
+    name: 'Local Database',
     host: '',
     port: 5432,
     database: '',
@@ -27,6 +28,18 @@ export function DatabaseConnectionForm({
     <form onSubmit={handleSubmit} className="space-y-4 max-w-md mx-auto p-6 bg-white rounded-lg shadow">
       <h2 className="text-2xl font-bold mb-6">Connect Database</h2>
       
+      <div>
+        <label htmlFor="name" className="block text-sm font-medium text-gray-700">Connection Name</label>
+        <input
+          type="text"
+          id="name"
+          value={credentials.name}
+          onChange={(e) => setCredentials(prev => ({ ...prev, name: e.target.value }))}
+          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+          required
+        />
+      </div>
+
       <div>
         <label htmlFor="host" className="block text-sm font-medium text-gray-700">Host</label>
         <input

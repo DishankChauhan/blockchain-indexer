@@ -1,4 +1,4 @@
-import { logError } from './serverLogger';
+import clientLogger from './clientLogger';
 import type { ErrorLogContext } from './serverLogger';
 
 export interface ErrorContext {
@@ -9,40 +9,23 @@ export interface ErrorContext {
 }
 
 export class AppError extends Error {
-  public statusCode: number;
-  public isOperational: boolean;
+  public readonly statusCode: number;
+  public readonly isOperational: boolean;
   context?: ErrorContext;
 
-  constructor(message: string, statusCode = 500) {
+  constructor(message: string, statusCode = 500, isOperational = true) {
     super(message);
     this.statusCode = statusCode;
-    this.isOperational = true;
-    this.name = this.constructor.name;
+    this.isOperational = isOperational;
+    this.name = 'AppError';
     Error.captureStackTrace(this, this.constructor);
   }
 }
 
-export const handleError = async (error: Error, errorContext?: Record<string, any>) => {
-  if (!(error instanceof AppError)) {
-    error = new AppError(error.message);
-  }
-
-  const context = {
-    ...errorContext,
-    statusCode: (error as AppError).statusCode,
-    isOperational: (error as AppError).isOperational
-  };
-
-  const errorData = {
-    message: error.message,
-    name: error.name,
-    stack: error.stack,
-  };
-
-  await logError(errorData.message, errorData, context as ErrorLogContext);
-
-  return error;
-};
+export function handleError(error: Error | AppError, context?: Record<string, any>) {
+  // Client-side error handling only
+  clientLogger.error('Application error', error, context);
+}
 
 export const isOperationalError = (error: Error): boolean => {
   if (error instanceof AppError) {

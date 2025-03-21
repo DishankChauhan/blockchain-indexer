@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ApiClient } from '@/lib/api/apiClient';
-import { AppError, handleError } from '@/lib/utils/errorHandling';
+import { ApiClient, apiRequest } from '@/lib/api/apiClient';
+import { AppError } from '@/lib/utils/errorHandling';
 import Link from 'next/link';
 import { toast } from 'react-hot-toast';
 import { useSession } from 'next-auth/react';
 import { Card } from '@/components/ui/card';
+import clientLogger from '@/lib/utils/clientLogger';
+import { LoadingSpinner } from '@/components/LoadingSpinner';
+
 
 // Types
 interface DashboardData {
@@ -34,12 +37,6 @@ const trackError = (error: Error) => {
 };
 
 // Components
-const LoadingSpinner = () => (
-  <div className="flex items-center justify-center">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-  </div>
-);
-
 const ErrorDisplay = ({ message, onRetry }: { message: string; onRetry: () => void }) => (
   <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
     <div className="sm:mx-auto sm:w-full sm:max-w-md">
@@ -61,39 +58,37 @@ const ErrorDisplay = ({ message, onRetry }: { message: string; onRetry: () => vo
 
 const UserInfo = ({ user }: { user: any }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
-    <h2 className="text-xl font-semibold mb-4">User Information</h2>
-    <p>Email: {user?.email}</p>
+    <h2 className="text-xl font-semibold text-gray-900 mb-4">User Information</h2>
+    <p className="text-gray-700">Email: {user?.email}</p>
   </div>
 );
 
-const ConnectionsList = ({ connections }: { connections: any[] }) => (
+const ConnectionsList = ({ connections = [] }: { connections?: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
     <div className="flex justify-between items-center mb-4">
-      <h2 className="text-xl font-semibold">Database Connections</h2>
+      <h2 className="text-xl font-semibold text-gray-900">Database Connections</h2>
       <Link 
-        href="/dashboard/connections/new" 
+        href="/connections/new" 
         className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
       >
         Add Connection
       </Link>
     </div>
-    {connections.length === 0 ? (
-      <div className="text-center py-8">
-        <p className="text-gray-500 mb-4">No database connections configured</p>
-        <Link 
-          href="/dashboard/connections/new"
-          className="text-indigo-600 hover:text-indigo-500"
-        >
-          Click here to add your first database connection
-        </Link>
-      </div>
+    {!connections?.length ? (
+      <p className="text-gray-500">No database connections configured</p>
     ) : (
       <ul className="divide-y divide-gray-200">
         {connections.map((conn) => (
           <li key={conn.id} className="py-4 flex justify-between items-center">
             <div>
-              <p className="font-medium">{conn.database}</p>
-              <p className="text-sm text-gray-500">Status: {conn.status}</p>
+              <p className="font-medium text-gray-900">{conn.database}</p>
+              <p className="text-sm">
+                Status: <span className={`font-medium ${
+                  conn.status === 'active' ? 'text-green-600' :
+                  conn.status === 'error' ? 'text-red-600' :
+                  'text-yellow-600'
+                }`}>{conn.status}</span>
+              </p>
             </div>
             <div className="flex space-x-2">
               <button 
@@ -116,37 +111,33 @@ const ConnectionsList = ({ connections }: { connections: any[] }) => (
   </div>
 );
 
-const JobsList = ({ jobs }: { jobs: any[] }) => (
+const JobsList = ({ jobs = [] }: { jobs?: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6 mb-6">
     <div className="flex justify-between items-center mb-4">
-      <h2 className="text-xl font-semibold">Indexing Jobs</h2>
+      <h2 className="text-xl font-semibold text-gray-900">Indexing Jobs</h2>
       <Link 
-        href="/dashboard/jobs/new" 
+        href="/jobs/new" 
         className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
       >
         Create New Job
       </Link>
     </div>
-    {jobs.length === 0 ? (
-      <div className="text-center py-8">
-        <p className="text-gray-500 mb-4">No indexing jobs configured</p>
-        <Link 
-          href="/dashboard/jobs/new"
-          className="text-indigo-600 hover:text-indigo-500"
-        >
-          Click here to create your first indexing job
-        </Link>
-      </div>
+    {!jobs?.length ? (
+      <p className="text-gray-500">No indexing jobs configured</p>
     ) : (
       <ul className="divide-y divide-gray-200">
         {jobs.map((job) => (
           <li key={job.id} className="py-4 flex justify-between items-center">
             <div>
-              <p className="font-medium">Job {job.id}</p>
-              <p className="text-sm text-gray-500">
-                Type: {job.type} • Status: {job.status}
+              <p className="font-medium text-gray-900">Job {job.id}</p>
+              <p className="text-sm text-gray-600">
+                Type: {job.type} • Status: <span className={`font-medium ${
+                  job.status === 'active' ? 'text-green-600' :
+                  job.status === 'error' ? 'text-red-600' :
+                  'text-yellow-600'
+                }`}>{job.status}</span>
               </p>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-gray-500">
                 Created: {new Date(job.createdAt).toLocaleString()}
               </p>
             </div>
@@ -181,18 +172,23 @@ const JobsList = ({ jobs }: { jobs: any[] }) => (
   </div>
 );
 
-const NotificationsList = ({ notifications }: { notifications: any[] }) => (
+const NotificationsList = ({ notifications = [] }: { notifications?: any[] }) => (
   <div className="bg-white shadow rounded-lg p-6">
-    <h2 className="text-xl font-semibold mb-4">Recent Notifications</h2>
-    {notifications.length === 0 ? (
+    <h2 className="text-xl font-semibold text-gray-900 mb-4">Recent Notifications</h2>
+    {!notifications?.length ? (
       <p className="text-gray-500">No recent notifications</p>
     ) : (
       <ul className="divide-y divide-gray-200">
         {notifications.map((notification) => (
           <li key={notification.id} className="py-4">
-            <p className="font-medium">{notification.message}</p>
-            <p className="text-sm text-gray-500">
-              Type: {notification.type} • Status: {notification.status}
+            <p className="font-medium text-gray-900">{notification.message}</p>
+            <p className="text-sm text-gray-600">
+              Type: {notification.type} • Status: <span className={`font-medium ${
+                notification.status === 'success' ? 'text-green-600' :
+                notification.status === 'error' ? 'text-red-600' :
+                notification.status === 'warning' ? 'text-yellow-600' :
+                'text-blue-600'
+              }`}>{notification.status}</span>
             </p>
           </li>
         ))}
@@ -216,11 +212,12 @@ const useDashboardData = () => {
         const response = await apiClient.get<ApiResponse<DashboardData>>('/api/dashboard');
         setData(response.data);
       } catch (err) {
-        const error = handleError(err instanceof Error ? err : new Error('Failed to load dashboard'), {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load dashboard';
+        clientLogger.error('Failed to load dashboard', err as Error, {
           component: 'DashboardPage',
           action: 'loadDashboard'
         });
-        setError(error.message);
+        setError(errorMessage);
         toast.error('Failed to load dashboard data');
       } finally {
         setIsLoading(false);
@@ -240,6 +237,11 @@ const testConnection = async (connectionId: string) => {
     await apiClient.post(`/api/connections/${connectionId}/test`, {});
     toast.success('Connection test successful');
   } catch (error) {
+    clientLogger.error('Failed to test connection', error as Error, {
+      component: 'DashboardPage',
+      action: 'testConnection',
+      connectionId
+    });
     toast.error('Failed to test connection');
   }
 };
@@ -251,6 +253,11 @@ const removeConnection = async (connectionId: string) => {
     toast.success('Connection removed successfully');
     window.location.reload();
   } catch (error) {
+    clientLogger.error('Failed to remove connection', error as Error, {
+      component: 'DashboardPage',
+      action: 'removeConnection',
+      connectionId
+    });
     toast.error('Failed to remove connection');
   }
 };
@@ -290,47 +297,28 @@ const stopJob = async (jobId: string) => {
 
 // Main component
 export default function DashboardPage() {
-  const { isLoading, error, data } = useDashboardData();
   const { data: session } = useSession();
+  const { isLoading, error, data: dashboardData } = useDashboardData();
+
+  useEffect(() => {
+    trackPageView();
+  }, []);
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingSpinner />
-      </div>
-    );
+    return <LoadingSpinner />;
   }
 
   if (error) {
     return <ErrorDisplay message={error} onRetry={() => window.location.reload()} />;
   }
 
-  if (!data) {
-    return <div className="p-6">No data available</div>;
-  }
-
   return (
-    <div className="container mx-auto p-6 space-y-8">
-      <div className="space-y-6">
-        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
-          <h2 className="text-xl font-semibold text-white mb-4">User Info</h2>
-          <p className="text-white">{session?.user?.email}</p>
-        </Card>
-
-        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
-          <h2 className="text-xl font-semibold text-white mb-2">Database Connections</h2>
-          <p className="text-white">{data.connections?.length || 0} active connections</p>
-        </Card>
-
-        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
-          <h2 className="text-xl font-semibold text-white mb-2">Indexing Jobs</h2>
-          <p className="text-white">{data.jobs?.length || 0} jobs running</p>
-        </Card>
-
-        <Card className="bg-zinc-800/50 border-zinc-700 p-6">
-          <h2 className="text-xl font-semibold text-white mb-2">Notifications</h2>
-          <p className="text-white">{data.notifications?.length || 0} unread notifications</p>
-        </Card>
+    <div className="container mx-auto p-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <UserInfo user={session?.user} />
+        <ConnectionsList connections={dashboardData?.connections} />
+        <JobsList jobs={dashboardData?.jobs} />
+        <NotificationsList notifications={dashboardData?.notifications} />
       </div>
     </div>
   );

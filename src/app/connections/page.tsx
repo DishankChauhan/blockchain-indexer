@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import clientLogger from '@/lib/utils/clientLogger';
+import { toast } from 'sonner';
 
 interface DatabaseConnection {
   id: string;
@@ -58,8 +59,7 @@ export default function ConnectionsPage() {
       setConnections(data || []);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load connections';
-      clientLogger.error('Failed to load connections', {
-        error: error as Error,
+      clientLogger.error('Failed to load connections', error instanceof Error ? error : undefined, {
         component: 'ConnectionsPage',
         action: 'LoadConnections',
         userId: session?.user?.id
@@ -102,8 +102,7 @@ export default function ConnectionsPage() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to create connection';
-      clientLogger.error('Failed to create connection', {
-        error: error as Error,
+      clientLogger.error('Failed to create connection', error instanceof Error ? error : undefined, {
         component: 'ConnectionsPage',
         action: 'CreateConnection',
         userId: session?.user?.id
@@ -115,6 +114,7 @@ export default function ConnectionsPage() {
   const handleTestConnection = async (connectionId: string) => {
     try {
       setError(null);
+      toast.loading('Testing connection...');
       const response = await fetch(`/api/connections/${connectionId}/test`, {
         method: 'POST'
       });
@@ -123,6 +123,7 @@ export default function ConnectionsPage() {
         throw new Error('Connection test failed');
       }
 
+      toast.success('Connection test successful!');
       clientLogger.info('Connection test successful', {
         component: 'ConnectionsPage',
         action: 'TestConnection',
@@ -133,8 +134,7 @@ export default function ConnectionsPage() {
       await loadConnections();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Connection test failed';
-      clientLogger.error('Failed to test connection', {
-        error: error as Error,
+      clientLogger.error('Failed to test connection', error instanceof Error ? error : undefined, {
         component: 'ConnectionsPage',
         action: 'TestConnection',
         connectionId,
@@ -165,8 +165,7 @@ export default function ConnectionsPage() {
       await loadConnections();
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to remove connection';
-      clientLogger.error('Failed to remove connection', {
-        error: error as Error,
+      clientLogger.error('Failed to remove connection', error instanceof Error ? error : undefined, {
         component: 'ConnectionsPage',
         action: 'RemoveConnection',
         connectionId,

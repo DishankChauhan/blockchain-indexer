@@ -141,8 +141,13 @@ export default indexingQueue;
 
 export async function processWebhookJob(job: Job<WebhookJobData>) {
   try {
-    const { webhookId, payload, userId } = job.data;
-    
+    const { webhookId, userId, payload } = job.data;
+
+    // Validate job data
+    if (!webhookId || !userId || !payload) {
+      throw new Error('Invalid job data');
+    }
+
     AppLogger.info('Processing webhook job', {
       component: 'Worker',
       action: 'ProcessWebhookJob',
@@ -162,18 +167,15 @@ export async function processWebhookJob(job: Job<WebhookJobData>) {
         webhookId,
         errors: result.errors
       });
-      
-      // Even if there are errors, we don't throw since the job processed
-      return result;
+    } else {
+      AppLogger.info('Webhook processing completed successfully', {
+        component: 'Worker',
+        action: 'ProcessWebhookJob',
+        jobId: job.id,
+        webhookId,
+        transactionsProcessed: result.transactionsProcessed
+      });
     }
-
-    AppLogger.info('Webhook processing completed successfully', {
-      component: 'Worker',
-      action: 'ProcessWebhookJob',
-      jobId: job.id,
-      webhookId,
-      transactionsProcessed: result.transactionsProcessed
-    });
 
     return result;
   } catch (error) {

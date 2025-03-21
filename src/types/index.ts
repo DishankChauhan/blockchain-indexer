@@ -23,39 +23,40 @@ export interface DatabaseConnection {
 }
 
 export interface IndexingJob {
-  metadata: {};
   id: string;
   userId: string;
   dbConnectionId: string;
-  category: string;
+  type: string;
   config: IndexingConfig;
-  status: 'pending' | 'active' | 'paused' | 'error';
-  lastIndexedAt?: Date | null;
+  status: string;
+  progress: number;
+  lastRunAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface IndexingConfig {
+  type: string;
+  filters?: {
+    accounts?: string[];
+    programIds?: string[];
+    mintAddresses?: string[];
+  };
+  webhook?: {
+    enabled: boolean;
+    url?: string;
+    secret?: string;
+  };
   categories: {
     transactions: boolean;
     nftEvents: boolean;
     tokenTransfers: boolean;
-    accountActivity: boolean;
     programInteractions: boolean;
-    defiTransactions: boolean;
-    governance: boolean;
   };
-  filters: {
-    programIds?: string[];
-    accounts?: string[];
-    startSlot?: number;
-    includeMints: boolean;
-    includeMetadata: boolean;
-  };
-  webhook: {
-    enabled: boolean;
-    url?: string;
-    secret?: string;
+  options?: {
+    batchSize?: number;
+    retryAttempts?: number;
+    retryDelay?: number;
   };
 }
 
@@ -89,9 +90,10 @@ export interface Notification {
   status: 'read' | 'unread';
   createdAt: Date;
   updatedAt: Date;
-} 
+}
 
 export interface DatabaseCredentials {
+  name: string;
   host: string;
   port: number;
   database: string;

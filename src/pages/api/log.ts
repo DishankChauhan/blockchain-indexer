@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { ServerLogger } from '@/lib/utils/serverLogger';
+import { logError, logWarn, logInfo, logDebug } from '@/lib/utils/serverLogger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -15,19 +15,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     switch (level) {
       case 'error':
-        ServerLogger.error(message, new Error(message), meta);
+        logError(message, new Error(message), meta);
         break;
       case 'warn':
-        ServerLogger.warn(message, meta);
+        logWarn(message, meta);
         break;
       case 'info':
-        ServerLogger.info(message, meta);
+        logInfo(message, meta);
         break;
       case 'debug':
-        ServerLogger.debug(message, meta);
+        logDebug(message, meta);
         break;
       default:
-        ServerLogger.info(message, meta);
+        logInfo(message, meta);
     }
 
     return res.status(200).json({ message: 'Log recorded successfully' });

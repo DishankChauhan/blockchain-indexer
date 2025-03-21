@@ -6,7 +6,7 @@ import { CircuitBreaker } from '../../utils/circuitBreaker';
 import { AppError } from '../../utils/errorHandling';
 import { Pool } from 'pg';
 import { HeliusWebhookData } from '@/lib/types/helius';
-import { IndexingJob } from '@/types';
+import { IndexingJob, IndexingConfig } from '@/types';
 import { TokenPriceService } from '../tokenPriceService';
 import { LendingService } from '../lendingService';
 import { JobService } from '../jobService';
@@ -62,6 +62,31 @@ describe('HeliusService', () => {
     timestamp: Date.now(),
     type: '',
     sourceAddress: ''
+  };
+
+  const mockConfig: IndexingConfig = {
+    type: 'default',
+    filters: {
+      accounts: ['account1'],
+      programIds: ['program1'],
+      mintAddresses: ['mint1']
+    },
+    webhook: {
+      enabled: true,
+      url: 'https://test.com/webhook',
+      secret: 'test-secret'
+    },
+    categories: {
+      transactions: true,
+      nftEvents: true,
+      tokenTransfers: true,
+      programInteractions: true
+    },
+    options: {
+      batchSize: 100,
+      retryAttempts: 3,
+      retryDelay: 1000
+    }
   };
 
   beforeEach(() => {
@@ -297,34 +322,12 @@ describe('HeliusService', () => {
       id: 'test-job-id',
       userId: 'test-user-id',
       dbConnectionId: 'test-db-connection-id',
-      category: 'blockchain',
+      type: 'default',
       status: 'pending',
-      metadata: {},
+      progress: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
-      config: {
-        filters: {
-          programIds: ['program1'],
-          accounts: ['account1'],
-          includeMints: true,
-          includeMetadata: true,
-          startSlot: 0,
-        },
-        webhook: {
-          enabled: true,
-          url: 'https://test.com/webhook',
-          secret: 'test-secret',
-        },
-        categories: {
-          transactions: true,
-          nftEvents: true,
-          tokenTransfers: true,
-          programInteractions: true,
-          accountActivity: false,
-          defiTransactions: false,
-          governance: false,
-        },
-      },
+      config: mockConfig
     };
 
     it('should setup indexing successfully', async () => {

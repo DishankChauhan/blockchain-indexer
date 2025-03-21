@@ -6,6 +6,10 @@ import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface DatabaseConnection {
   id: string;
@@ -82,6 +86,16 @@ export default function NewJobPage() {
     setError(null);
 
     try {
+      // Validate slot range
+      if (config.endSlot !== 0 && config.endSlot <= config.startSlot) {
+        throw new Error('End slot must be greater than start slot');
+      }
+
+      // Validate connection
+      if (!config.dbConnectionId) {
+        throw new Error('Please select a database connection');
+      }
+
       const response = await fetch('/api/jobs', {
         method: 'POST',
         headers: {
@@ -121,91 +135,98 @@ export default function NewJobPage() {
             )}
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Job Name
-                </label>
-                <input
-                  type="text"
-                  value={config.name}
-                  onChange={(e) => setConfig(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Database Connection
-                </label>
-                <select
-                  value={config.dbConnectionId}
-                  onChange={(e) => setConfig(prev => ({ ...prev, dbConnectionId: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  required
-                >
-                  <option value="">Select a connection</option>
-                  {connections.map((conn) => (
-                    <option key={conn.id} value={conn.id}>
-                      {conn.database}@{conn.host}:{conn.port}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="name" className="text-lg font-semibold mb-2">Job Name</Label>
+                  <Input
+                    id="name"
+                    placeholder="Enter job name"
+                    value={config.name}
+                    onChange={(e) => setConfig(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="connection" className="text-lg font-semibold mb-2">Database Connection</Label>
+                  <Select
+                    value={config.dbConnectionId}
+                    onValueChange={(value) => setConfig(prev => ({ ...prev, dbConnectionId: value }))}
+                    className="w-full"
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select connection" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {connections.map((conn) => (
+                        <SelectItem
+                          key={conn.id}
+                          value={conn.id}
+                        >
+                          <span className={`${
+                            conn.status === 'active' ? 'text-green-600' :
+                            conn.status === 'error' ? 'text-red-600' :
+                            'text-yellow-600'
+                          } font-medium`}>
+                            {`${conn.database}@${conn.host}:${conn.port}`}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Start Slot
-                  </label>
-                  <input
+                  <Label htmlFor="startSlot" className="text-lg font-semibold mb-2">Start Slot</Label>
+                  <Input
+                    id="startSlot"
                     type="number"
+                    placeholder="Enter start slot (0 for genesis)"
                     value={config.startSlot}
                     onChange={(e) => setConfig(prev => ({ ...prev, startSlot: parseInt(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    required
-                    min="0"
+                    className="w-full"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    End Slot
-                  </label>
-                  <input
+                  <Label htmlFor="endSlot" className="text-lg font-semibold mb-2">End Slot</Label>
+                  <Input
+                    id="endSlot"
                     type="number"
+                    placeholder="Enter end slot (0 for continuous)"
                     value={config.endSlot}
                     onChange={(e) => setConfig(prev => ({ ...prev, endSlot: parseInt(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    required
-                    min="0"
+                    className="w-full"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Data Categories
-                </label>
-                <div className="space-y-2">
-                  {Object.entries(config.categories).map(([key, value]) => (
-                    <label key={key} className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={value}
-                        onChange={(e) => setConfig(prev => ({
-                          ...prev,
-                          categories: {
-                            ...prev.categories,
-                            [key]: e.target.checked
-                          }
-                        }))}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                      />
-                      <span className="ml-2 text-sm text-gray-700">
-                        {key.replace(/([A-Z])/g, ' $1').trim()}
-                      </span>
-                    </label>
+                <h3 className="text-lg font-semibold mb-4">Data Categories</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  {Object.entries(config.categories).map(([category, enabled]) => (
+                    <div
+                      key={category}
+                      className={`p-4 rounded-lg border-2 transition-colors ${
+                        enabled ? 'border-green-500 bg-green-50' : 'border-gray-200'
+                      }`}
+                    >
+                      <label className="flex items-center space-x-3 cursor-pointer">
+                        <Checkbox
+                          checked={enabled}
+                          onCheckedChange={(checked: boolean) => setConfig(prev => ({
+                            ...prev,
+                            categories: {
+                              ...prev.categories,
+                              [category as keyof typeof config.categories]: checked
+                            }
+                          }))}
+                        />
+                        <span className="font-medium">
+                          {category.replace(/([A-Z])/g, ' $1').trim()}
+                        </span>
+                      </label>
+                    </div>
                   ))}
                 </div>
               </div>

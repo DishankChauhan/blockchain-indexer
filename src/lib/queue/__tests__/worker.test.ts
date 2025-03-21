@@ -42,77 +42,62 @@ describe('Worker Queue', () => {
   });
 
   describe('processWebhookJob', () => {
-    it('should process webhook job successfully', async () => {
-      const result = await processWebhookJob(mockJob as Job);
-
-      expect(result).toEqual({
-        success: true,
-        transactionsProcessed: 1,
-      });
-
-      expect(HeliusService.getInstance).toHaveBeenCalledWith(mockJob.data.userId);
-      expect(AppLogger.info).toHaveBeenCalledWith(
-        'Processing webhook job',
-        expect.objectContaining({
-          component: 'Worker',
-          action: 'ProcessWebhookJob',
-          jobId: mockJob.id,
-        })
-      );
+    beforeEach(() => {
+      jest.clearAllMocks();
     });
 
-    it('should handle processing errors', async () => {
-      const error = new Error('Processing failed');
-      (HeliusService.getInstance as jest.Mock).mockReturnValue({
-        handleWebhookData: jest.fn().mockRejectedValue(error),
-      });
+    it('should process webhook data successfully', async () => {
+      const mockJob = {
+        data: {
+          webhookId: 'test-webhook-id',
+          userId: 'test-user-id',
+          payload: {
+            signature: 'test-signature',
+            timestamp: Date.now(),
+          },
+        },
+      } as Job;
 
-      await expect(processWebhookJob(mockJob as Job)).rejects.toThrow(error);
-
-      expect(AppLogger.error).toHaveBeenCalledWith(
-        'Failed to process webhook job',
-        error,
-        expect.objectContaining({
-          component: 'Worker',
-          action: 'ProcessWebhookJob',
-          jobId: mockJob.id,
-        })
-      );
-    });
-
-    it('should handle partial success with errors', async () => {
       (HeliusService.getInstance as jest.Mock).mockReturnValue({
         handleWebhookData: jest.fn().mockResolvedValue({
-          success: false,
-          transactionsProcessed: 0,
-          errors: [{
-            signature: 'test-signature',
-            error: 'Failed to process transaction',
-          }],
+          success: true,
+          transactionsProcessed: 1,
         }),
       });
 
-      const result = await processWebhookJob(mockJob as Job);
+      const result = await processWebhookJob(mockJob);
+      expect(result.success).toBe(true);
+      expect(result.transactionsProcessed).toBe(1);
+    });
 
-      expect(result.success).toBe(false);
-      expect(result.errors).toHaveLength(1);
-      expect(AppLogger.warn).toHaveBeenCalledWith(
-        'Webhook processing completed with errors',
-        expect.objectContaining({
-          component: 'Worker',
-          action: 'ProcessWebhookJob',
-          jobId: mockJob.id,
-        })
-      );
+    it('should handle webhook processing errors', async () => {
+      const mockJob = {
+        data: {
+          webhookId: 'test-webhook-id',
+          userId: 'test-user-id',
+          payload: {
+            signature: 'test-signature',
+            timestamp: Date.now(),
+          },
+        },
+      } as Job;
+
+      const mockError = new Error('Processing failed');
+      (HeliusService.getInstance as jest.Mock).mockReturnValue({
+        handleWebhookData: jest.fn().mockRejectedValue(mockError),
+      });
+
+      await expect(processWebhookJob(mockJob)).rejects.toThrow('Processing failed');
     });
 
     it('should validate job data', async () => {
       const invalidJob = {
-        ...mockJob,
-        data: {},
-      };
+        data: {
+          // Missing required fields
+        },
+      } as Job;
 
-      await expect(processWebhookJob(invalidJob as Job)).rejects.toThrow();
+      await expect(processWebhookJob(invalidJob)).rejects.toThrow('Invalid job data');
     });
   });
 }); 

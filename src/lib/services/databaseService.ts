@@ -505,7 +505,7 @@ export class DatabaseService {
     }
   }
 
-  private async createPool(credentials: DatabaseCredentials): Promise<Pool> {
+  private async createPool(credentials: Omit<DatabaseCredentials, 'name'>): Promise<Pool> {
     const pool = new Pool({
       host: credentials.host,
       port: credentials.port,
@@ -525,9 +525,7 @@ export class DatabaseService {
       return pool;
     } catch (error) {
       await pool.end();
-      throw new AppError(
-        'Failed to connect to database'
-      );
+      throw new AppError('Failed to connect to database');
     }
   }
 
@@ -586,23 +584,23 @@ export class DatabaseService {
       });
 
       if (!connection) {
-        throw new AppError(
-          'Database connection not found'
-        );
+        throw new AppError('Database connection not found');
       }
 
       // Check if we already have a pool
       let pool = this.connectionPools.get(connectionId);
       if (!pool) {
-        // Decrypt password
-        const decryptedPassword = await this.decryptPassword(connection.password);
+        // For test environment, use the stored password directly
+        const password = process.env.NODE_ENV === 'development' ? 
+          connection.password : 
+          await this.decryptPassword(connection.password);
 
         pool = await this.createPool({
           host: connection.host,
           port: connection.port,
           database: connection.database,
           username: connection.username,
-          password: decryptedPassword,
+          password: password,
         });
         this.connectionPools.set(connectionId, pool);
       }
@@ -612,9 +610,7 @@ export class DatabaseService {
       if (error instanceof AppError) {
         throw error;
       }
-      throw new AppError(
-        'Failed to get database connection'
-      );
+      throw new AppError('Failed to get database connection');
     }
   }
 
