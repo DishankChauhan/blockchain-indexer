@@ -36,6 +36,24 @@ export interface AggregatedTokenPrice {
   }>;
 }
 
+export interface TokenEvent {
+  type: 'TOKEN_SWAP';
+  signature: string;
+  timestamp: number;
+  tokenTransfers: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    mint: string;
+    amount: number;
+  }>;
+  accountData: Array<{
+    account: string;
+    program: string;
+    data: any;
+  }>;
+  raw: any;
+}
+
 export class TokenPriceService {
   private static instance: TokenPriceService | null = null;
   private readonly platformPrograms: Map<string, string>;
@@ -674,7 +692,7 @@ export class TokenPriceService {
           throw new AppError(`Failed to fetch token events: ${response.statusText}`);
         }
 
-        const events = await response.json();
+        const events = await response.json() as TokenEvent[];
         const client = await dbPool.connect();
         
         try {
@@ -733,27 +751,28 @@ export class TokenPriceService {
     }
   }
 
-  private isValidTokenEvent(event: any): boolean {
+  private isValidTokenEvent(event: TokenEvent | HeliusWebhookData): boolean {
     return event.type === 'TOKEN_SWAP' && 
-           event.tokenTransfers?.length >= 2 &&
-           event.signature &&
-           event.timestamp;
+           Array.isArray(event.tokenTransfers) &&
+           event.tokenTransfers.length >= 2 &&
+           event.signature !== undefined &&
+           event.timestamp !== undefined;
   }
 
-  private extractTokenPrice(event: any): TokenPrice | null {
+  private extractTokenPrice(event: TokenEvent | HeliusWebhookData): TokenPrice | null {
     try {
       const platform = this.getPlatform(event.accountData);
       if (!platform) return null;
+
+      if (!event.tokenTransfers || event.tokenTransfers.length === 0) return null;
 
       const price = this.calculatePrice(event.tokenTransfers);
       if (!price) return null;
 
       return {
         tokenMint: event.tokenTransfers[0].mint,
-        tokenName: event.tokenData?.name || 'Unknown',
+        tokenName: '', // Token names are fetched separately if needed
         priceUsd: price,
-        volume24h: event.volume24h,
-        marketCap: event.marketCap,
         platform,
         timestamp: new Date(event.timestamp * 1000),
         signature: event.signature,
@@ -763,7 +782,7 @@ export class TokenPriceService {
       logError('Failed to extract token price', error as Error, {
         component: 'TokenPriceService',
         action: 'extractTokenPrice',
-        eventSignature: event.signature
+        signature: event.signature
       });
       return null;
     }

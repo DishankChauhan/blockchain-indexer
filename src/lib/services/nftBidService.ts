@@ -32,6 +32,21 @@ export interface ActiveBids {
   }>;
 }
 
+export interface NFTBidEvent {
+  nft: {
+    mint: string;
+    name?: string;
+    collection?: string;
+  };
+  bidder: string;
+  amount: number;
+  type: string;
+  expiryTime?: number;
+  timestamp: number;
+  signature: string;
+  currency?: string;
+}
+
 export class NFTBidService {
   private static instance: NFTBidService | undefined;
   private readonly baseUrl: string;
@@ -110,7 +125,7 @@ export class NFTBidService {
           throw new AppError(`Failed to fetch NFT events: ${response.statusText}`);
         }
 
-        const events = await response.json();
+        const events = await response.json() as NFTBidEvent[];
         
         // Process events in transaction
         const client = await pool.connect();
@@ -118,18 +133,8 @@ export class NFTBidService {
           await client.query('BEGIN');
 
           for (const event of events) {
-            const bid: NFTBid = {
-              mintAddress: event.nft.mint,
-              bidderAddress: event.bidder,
-              bidAmount: event.amount,
-              marketplace: this.getMarketplace(event),
-              currency: event.currency || 'SOL',
-              status: this.getBidStatus(event.type),
-              expiryTime: event.expiryTime ? new Date(event.expiryTime) : undefined,
-              timestamp: new Date(event.timestamp * 1000),
-              signature: event.signature,
-              rawData: event
-            };
+            const bid = this.extractBidData(event);
+            if (!bid) continue;
 
             await client.query(`
               INSERT INTO nft_bids (
@@ -243,9 +248,48 @@ export class NFTBidService {
     }
   }
 
-  private extractBidData(webhookData: HeliusWebhookData): any {
-    // Implementation of bid data extraction
-    return null;
+  private extractBidData(data: HeliusWebhookData | NFTBidEvent): NFTBid | null {
+    try {
+      if ('nft' in data && 'bidder' in data) {
+        // Handle NFTBidEvent from API
+        const event = data as NFTBidEvent;
+        return {
+          mintAddress: event.nft.mint,
+          bidderAddress: event.bidder,
+          bidAmount: event.amount,
+          marketplace: 'Unknown', // API events don't include marketplace info
+          currency: event.currency || 'SOL',
+          status: this.getBidStatus(event.type),
+          expiryTime: event.expiryTime ? new Date(event.expiryTime * 1000) : undefined,
+          timestamp: new Date(event.timestamp * 1000),
+          signature: event.signature,
+          rawData: event
+        };
+      } else {
+        // Handle HeliusWebhookData from webhook
+        const webhook = data as HeliusWebhookData;
+        if (!webhook.nft?.mint) return null;
+        
+        return {
+          mintAddress: webhook.nft.mint,
+          bidderAddress: webhook.sourceAddress,
+          bidAmount: webhook.amount || 0,
+          marketplace: this.getMarketplace(webhook),
+          currency: 'SOL', // Webhook events are typically in SOL
+          status: this.getBidStatus(webhook.type),
+          timestamp: new Date(webhook.timestamp * 1000),
+          signature: webhook.signature,
+          rawData: webhook.raw
+        };
+      }
+    } catch (error) {
+      logError('Failed to extract bid data', error as Error, {
+        component: 'NFTBidService',
+        action: 'extractBidData',
+        signature: data.signature
+      });
+      return null;
+    }
   }
 
   public async getActiveBids(mintAddress: string, pool: Pool): Promise<any> {

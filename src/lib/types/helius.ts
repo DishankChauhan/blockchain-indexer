@@ -25,6 +25,12 @@ export interface HeliusTransaction {
 }
 
 export interface HeliusWebhookData {
+  tokenTransfers: Array<{
+    fromUserAccount: string;
+    toUserAccount: string;
+    mint: string;
+    amount: number;
+  }>;
   accountData: Array<{
     account: string;
     program: string;

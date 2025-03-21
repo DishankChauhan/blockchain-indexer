@@ -53,6 +53,35 @@ export interface LendingRate {
   rawData: any;
 }
 
+export interface LendingEvent {
+  type: 'LENDING_RATE_UPDATE' | 'RESERVE_UPDATE';
+  tokenData: {
+    mint: string;
+    name?: string;
+  };
+  signature: string;
+  timestamp: number;
+  data: {
+    reserve?: {
+      tokenMint: string;
+      tokenName?: string;
+      supplyRate?: number;
+      borrowRate?: number;
+      totalSupply?: number;
+      totalBorrow?: number;
+      utilization?: number;
+      [key: string]: any;
+    };
+    [key: string]: any;
+  };
+  accountData: Array<{
+    account: string;
+    program: string;
+    data: any;
+  }>;
+  raw: any;
+}
+
 export class LendingService {
   private static instance: LendingService | null = null;
   private readonly baseUrl: string;
@@ -124,7 +153,7 @@ export class LendingService {
           throw new AppError(`Failed to fetch lending events: ${response.statusText}`);
         }
 
-        const events = await response.json();
+        const events = await response.json() as LendingEvent[];
         const client = await dbPool.connect();
 
         try {
@@ -196,49 +225,97 @@ export class LendingService {
     }
   }
 
-  private isValidLendingEvent(event: any): boolean {
-    return (
-      (event.type === 'LENDING_RATE_UPDATE' || event.type === 'RESERVE_UPDATE') &&
-      event.tokenData?.mint &&
-      event.signature &&
-      event.timestamp
-    );
+  private isValidLendingEvent(event: LendingEvent | HeliusWebhookData): boolean {
+    if ('tokenData' in event) {
+      // Handle API event
+      return (
+        (event.type === 'LENDING_RATE_UPDATE' || event.type === 'RESERVE_UPDATE') &&
+        event.tokenData?.mint !== undefined &&
+        event.signature !== undefined &&
+        event.timestamp !== undefined &&
+        event.data?.reserve !== undefined
+      );
+    } else {
+      // Handle webhook event
+      return (
+        event.type === 'PROGRAM_EVENT' &&
+        event.signature !== undefined &&
+        event.timestamp !== undefined &&
+        Array.isArray(event.accountData) &&
+        event.accountData.some(account => 
+          this.supportedProtocols.has(account.program) &&
+          account.data &&
+          this.isValidReserveData(account.data)
+        )
+      );
+    }
   }
 
-  private extractLendingRate(event: any): LendingRate | null {
+  private extractLendingRate(event: LendingEvent | HeliusWebhookData): LendingRate | null {
     try {
-      const protocol = this.getProtocol(event.accountData);
-      if (!protocol) return null;
+      if ('tokenData' in event) {
+        // Handle API event
+        const protocol = this.getProtocol(event.accountData);
+        if (!protocol) return null;
 
-      const reserveData = event.data?.reserve || event.data;
-      if (!this.isValidReserveData(reserveData)) return null;
+        const reserveData = event.data.reserve;
+        if (!reserveData) return null;
 
-      // Calculate rates and utilization
-      const supplyRate = this.calculateSupplyRate(reserveData);
-      const borrowRate = this.calculateBorrowRate(reserveData);
-      const utilization = this.calculateUtilization(reserveData);
+        return {
+          tokenMint: event.tokenData.mint,
+          tokenName: event.tokenData.name || '',
+          protocol,
+          supplyRate: this.calculateSupplyRate(reserveData),
+          borrowRate: this.calculateBorrowRate(reserveData),
+          totalSupply: reserveData.totalSupply || 0,
+          totalBorrow: reserveData.totalBorrow || 0,
+          utilization: this.calculateUtilization(reserveData),
+          timestamp: new Date(event.timestamp * 1000),
+          signature: event.signature,
+          rawData: event.raw
+        };
+      } else {
+        // Handle webhook event
+        const protocol = this.getProtocol(event.accountData);
+        if (!protocol) return null;
 
-      return {
-        tokenMint: event.tokenData.mint,
-        tokenName: event.tokenData.name || 'Unknown',
-        protocol,
-        supplyRate,
-        borrowRate,
-        totalSupply: reserveData.totalSupply || 0,
-        totalBorrow: reserveData.totalBorrow || 0,
-        utilization,
-        timestamp: new Date(event.timestamp * 1000),
-        signature: event.signature,
-        rawData: event.raw
-      };
+        const reserveAccount = event.accountData.find(account => 
+          this.supportedProtocols.has(account.program));
+        if (!reserveAccount || !this.isValidReserveData(reserveAccount.data)) return null;
+
+        const reserveData = reserveAccount.data;
+        if (!this.isValidReserveData(reserveData)) return null;
+
+        return {
+          tokenMint: reserveData.tokenMint as string,
+          tokenName: (reserveData.tokenName as string) || '',
+          protocol,
+          supplyRate: this.calculateSupplyRate(reserveData),
+          borrowRate: this.calculateBorrowRate(reserveData),
+          totalSupply: Number(reserveData.totalSupply) || 0,
+          totalBorrow: Number(reserveData.totalBorrow) || 0,
+          utilization: this.calculateUtilization(reserveData),
+          timestamp: new Date(event.timestamp * 1000),
+          signature: event.signature,
+          rawData: event.raw
+        };
+      }
     } catch (error) {
       logError('Failed to extract lending rate', error as Error, {
         component: 'LendingService',
         action: 'extractLendingRate',
-        eventSignature: event.signature
+        signature: event.signature
       });
       return null;
     }
+  }
+
+  private isValidReserveData(data: any): boolean {
+    return data && (
+      (typeof data.totalSupply === 'number' || typeof data.totalSupply === 'string') &&
+      (typeof data.totalBorrow === 'number' || typeof data.totalBorrow === 'string') &&
+      typeof data.tokenMint === 'string'
+    );
   }
 
   private getProtocol(accountData: any[]): string | null {
@@ -249,13 +326,6 @@ export class LendingService {
       }
     }
     return null;
-  }
-
-  private isValidReserveData(data: any): boolean {
-    return data && (
-      (typeof data.totalSupply === 'number' || typeof data.totalSupply === 'string') &&
-      (typeof data.totalBorrow === 'number' || typeof data.totalBorrow === 'string')
-    );
   }
 
   private calculateSupplyRate(reserveData: any): number {

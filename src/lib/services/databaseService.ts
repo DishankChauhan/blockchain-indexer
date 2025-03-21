@@ -329,15 +329,19 @@ export class DatabaseService {
           await client.query(`
             CREATE TABLE IF NOT EXISTS nft_bids (
               id SERIAL PRIMARY KEY,
-              nft_address TEXT NOT NULL,
-              bid_amount NUMERIC NOT NULL,
+              signature VARCHAR(100) NOT NULL,
+              mint_address TEXT NOT NULL,
               bidder_address TEXT NOT NULL,
+              bid_amount NUMERIC NOT NULL,
               marketplace TEXT NOT NULL,
-              timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              status TEXT NOT NULL,
               expires_at TIMESTAMP,
-              status TEXT NOT NULL
+              timestamp TIMESTAMP NOT NULL,
+              raw_data JSONB NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS idx_nft_bids_address ON nft_bids(nft_address);
+            CREATE INDEX IF NOT EXISTS idx_nft_bids_signature ON nft_bids(signature);
+            CREATE INDEX IF NOT EXISTS idx_nft_bids_mint ON nft_bids(mint_address);
           `);
         }
 

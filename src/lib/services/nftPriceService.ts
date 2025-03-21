@@ -15,6 +15,23 @@ export interface NFTPrice {
   rawData: any;
 }
 
+export interface NFTPriceEvent {
+  nft: {
+    mint: string;
+    name?: string;
+    collection?: string;
+  };
+  amount: number;
+  type: string;
+  seller?: string;
+  timestamp: number;
+  signature: string;
+  raw: any;
+  accountData?: Array<{
+    program: string;
+  }>;
+}
+
 export interface CurrentPrice {
   mintAddress: string;
   prices: Array<{
@@ -44,8 +61,7 @@ export class NFTPriceService {
     ]);
     this.rateLimiter = new RateLimiter({
       tokensPerInterval: 50,
-      interval: 'second',
-      fireImmediately: true
+      interval: 'second'
     });
   }
 
@@ -63,27 +79,20 @@ export class NFTPriceService {
         action: 'fetchAndStoreData'
       });
 
-      // Get API key from environment
       const apiKey = process.env.HELIUS_API_KEY;
       if (!apiKey) {
         throw new AppError('HELIUS_API_KEY not found in environment');
       }
 
-      // Get the latest processed timestamp
       const lastProcessed = await this.getLastProcessedTimestamp(dbPool);
       const currentTime = Math.floor(Date.now() / 1000);
-
-      // Fetch data in batches
       const batchSize = 100;
-      let startTime = lastProcessed || (currentTime - 24 * 60 * 60); // Start from 24 hours ago if no last processed
-      
-      while (startTime < currentTime) {
-        // Wait for rate limit token
-        await this.rateLimiter.removeTokens(1);
+      let startTime = lastProcessed || (currentTime - 24 * 60 * 60);
 
-        const endTime = Math.min(startTime + 3600, currentTime); // Process 1 hour at a time
-        
-        // Fetch price events from Helius API
+      while (startTime < currentTime) {
+        await this.rateLimiter.removeTokens(1);
+        const endTime = Math.min(startTime + 3600, currentTime);
+
         const response = await fetch(`${this.baseUrl}/nft-events`, {
           method: 'POST',
           headers: {
@@ -92,7 +101,7 @@ export class NFTPriceService {
           },
           body: JSON.stringify({
             query: {
-              types: ['NFT_LISTING', 'NFT_SALE', 'NFT_CANCEL_LISTING'],
+              types: ['NFT_LISTING', 'NFT_SALE', 'NFT_LISTING_CANCELLED'],
               timeStart: startTime,
               timeEnd: endTime
             },
@@ -106,9 +115,8 @@ export class NFTPriceService {
           throw new AppError(`Failed to fetch NFT events: ${response.statusText}`);
         }
 
-        const events = await response.json();
+        const events = await response.json() as NFTPriceEvent[];
         
-        // Process events in transaction
         const client = await dbPool.connect();
         try {
           await client.query('BEGIN');
@@ -128,7 +136,6 @@ export class NFTPriceService {
             await this.insertPriceData(price, client);
           }
 
-          // Update last processed timestamp
           await client.query(`
             INSERT INTO indexer_state (key, value, updated_at)
             VALUES ('nft_prices_last_processed', $1, NOW())
@@ -145,7 +152,6 @@ export class NFTPriceService {
           client.release();
         }
 
-        // Update start time for next batch
         startTime = endTime;
 
         logInfo('Processed NFT price batch', {
@@ -187,8 +193,7 @@ export class NFTPriceService {
     }
   }
 
-  private getMarketplace(event: any): string {
-    // Check program interactions to determine marketplace
+  private getMarketplace(event: NFTPriceEvent): string {
     for (const account of event.accountData || []) {
       const marketplace = this.marketplacePrograms.get(account.program);
       if (marketplace) {
@@ -204,7 +209,7 @@ export class NFTPriceService {
         return 'listed';
       case 'NFT_SALE':
         return 'sold';
-      case 'NFT_CANCEL_LISTING':
+      case 'NFT_LISTING_CANCELLED':
         return 'cancelled';
       default:
         return 'listed';
@@ -212,62 +217,85 @@ export class NFTPriceService {
   }
 
   public async processPriceEvent(
-    event: HeliusWebhookData,
+    data: HeliusWebhookData | NFTPriceEvent,
     client: Pool | PoolClient
   ): Promise<void> {
     try {
-      // Only process if we have NFT data
-      if (!event.nft?.mint || !event.amount) {
-        logInfo('Skipping event - missing required NFT data', {
-          component: 'NFTPriceService',
-          action: 'processPriceEvent',
-          signature: event.signature
-        });
-        return;
-      }
-
-      const price: NFTPrice = {
-        mintAddress: event.nft.mint,
-        price: event.amount,
-        marketplace: this.getMarketplace(event),
-        sellerAddress: event.seller,
-        status: this.getPriceStatus(event.type),
-        timestamp: new Date(event.timestamp * 1000),
-        signature: event.signature,
-        rawData: event.raw
-      };
-
-      if (client instanceof Pool) {
-        const poolClient = await client.connect();
-        try {
-          await poolClient.query('BEGIN');
-          await this.insertPriceData(price, poolClient);
-          await poolClient.query('COMMIT');
-        } catch (error) {
-          await poolClient.query('ROLLBACK');
-          throw error;
-        } finally {
-          poolClient.release();
-        }
-      } else {
-        await this.insertPriceData(price, client);
-      }
-
-      logInfo('Processed NFT price event', {
+      logInfo('Processing NFT price event', {
         component: 'NFTPriceService',
         action: 'processPriceEvent',
-        signature: event.signature,
-        mintAddress: event.nft.mint,
-        price: event.amount,
-        status: price.status
+        signature: data.signature
       });
+
+      const price = this.extractPriceData(data);
+      if (!price) return;
+
+      await this.insertPriceData(price, client);
+
     } catch (error) {
-      logError('Failed to process NFT price event', error as Error, {
+      logError('Failed to process price event', error as Error, {
         component: 'NFTPriceService',
         action: 'processPriceEvent',
-        signature: event.signature
+        signature: data.signature
       });
-      throw new AppError('Failed to process NFT price event');
+      throw error;
+    }
+  }
+
+  private extractPriceData(data: HeliusWebhookData | NFTPriceEvent): NFTPrice | null {
+    try {
+      if ('nft' in data && data.nft && 'amount' in data) {
+        // Handle NFTPriceEvent from API
+        const event = data as NFTPriceEvent;
+        return {
+          mintAddress: event.nft.mint,
+          price: event.amount,
+          marketplace: this.getMarketplace(event),
+          sellerAddress: event.seller,
+          status: this.getPriceStatus(event.type),
+          timestamp: new Date(event.timestamp * 1000),
+          signature: event.signature,
+          rawData: event.raw
+        };
+      } else if ('nft' in data && data.nft?.mint) {
+        // Handle HeliusWebhookData from webhook
+        const webhook = data as HeliusWebhookData;
+        const nft = webhook.nft;
+        
+        if (!nft || !nft.mint) return null;
+        
+        return {
+          mintAddress: nft.mint,
+          price: webhook.amount || 0,
+          marketplace: this.getMarketplace({
+            nft: {
+              mint: nft.mint,
+              name: nft.name,
+              collection: nft.collection
+            },
+            amount: webhook.amount || 0,
+            type: webhook.type,
+            seller: webhook.seller,
+            timestamp: webhook.timestamp,
+            signature: webhook.signature,
+            raw: webhook.raw,
+            accountData: webhook.accountData
+          }),
+          sellerAddress: webhook.seller,
+          status: this.getPriceStatus(webhook.type),
+          timestamp: new Date(webhook.timestamp * 1000),
+          signature: webhook.signature,
+          rawData: webhook.raw
+        };
+      }
+      return null;
+    } catch (error) {
+      logError('Failed to extract price data', error as Error, {
+        component: 'NFTPriceService',
+        action: 'extractPriceData',
+        signature: data.signature
+      });
+      return null;
     }
   }
 
