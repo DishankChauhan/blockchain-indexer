@@ -26,12 +26,35 @@ interface JobConfig {
   endSlot: number;
   dbConnectionId: string;
   categories: {
-    transactions: boolean;
-    nftEvents: boolean;
-    tokenTransfers: boolean;
-    programInteractions: boolean;
+    nftBids: boolean;
+    nftPrices: boolean;
+    tokenBorrowing: boolean;
+    tokenPrices: boolean;
   };
 }
+
+const INDEXING_CATEGORIES = {
+  nftBids: {
+    title: 'NFT Bids',
+    description: 'Track currently available bids on NFTs',
+    table: 'nft_bids'
+  },
+  nftPrices: {
+    title: 'NFT Prices',
+    description: 'Monitor current prices of NFTs across marketplaces',
+    table: 'nft_prices'
+  },
+  tokenBorrowing: {
+    title: 'Borrowable Tokens',
+    description: 'Track currently available tokens to borrow',
+    table: 'lending_rates'
+  },
+  tokenPrices: {
+    title: 'Token Prices',
+    description: 'Monitor token prices across various platforms',
+    table: 'token_prices'
+  }
+};
 
 export default function NewJobPage() {
   const { data: session, status } = useSession();
@@ -45,10 +68,10 @@ export default function NewJobPage() {
     endSlot: 0,
     dbConnectionId: '',
     categories: {
-      transactions: true,
-      nftEvents: false,
-      tokenTransfers: false,
-      programInteractions: false,
+      nftBids: false,
+      nftPrices: false,
+      tokenBorrowing: false,
+      tokenPrices: false,
     },
   });
 
@@ -123,7 +146,7 @@ export default function NewJobPage() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-3xl mx-auto">
         <h1 className="text-2xl font-bold mb-6">Create New Indexing Job</h1>
 
         <Card className="p-6">
@@ -134,7 +157,7 @@ export default function NewJobPage() {
               </div>
             )}
 
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="name" className="text-lg font-semibold mb-2">Job Name</Label>
@@ -151,17 +174,13 @@ export default function NewJobPage() {
                   <Select
                     value={config.dbConnectionId}
                     onValueChange={(value) => setConfig(prev => ({ ...prev, dbConnectionId: value }))}
-                    className="w-full"
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Select connection" />
                     </SelectTrigger>
                     <SelectContent>
                       {connections.map((conn) => (
-                        <SelectItem
-                          key={conn.id}
-                          value={conn.id}
-                        >
+                        <SelectItem key={conn.id} value={conn.id}>
                           <span className={`${
                             conn.status === 'active' ? 'text-green-600' :
                             conn.status === 'error' ? 'text-red-600' :
@@ -204,27 +223,31 @@ export default function NewJobPage() {
               <div>
                 <h3 className="text-lg font-semibold mb-4">Data Categories</h3>
                 <div className="grid grid-cols-2 gap-4">
-                  {Object.entries(config.categories).map(([category, enabled]) => (
+                  {Object.entries(INDEXING_CATEGORIES).map(([key, category]) => (
                     <div
-                      key={category}
+                      key={key}
                       className={`p-4 rounded-lg border-2 transition-colors ${
-                        enabled ? 'border-green-500 bg-green-50' : 'border-gray-200'
+                        config.categories[key as keyof typeof config.categories]
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200'
                       }`}
                     >
-                      <label className="flex items-center space-x-3 cursor-pointer">
-                        <Checkbox
-                          checked={enabled}
-                          onCheckedChange={(checked: boolean) => setConfig(prev => ({
-                            ...prev,
-                            categories: {
-                              ...prev.categories,
-                              [category as keyof typeof config.categories]: checked
-                            }
-                          }))}
-                        />
-                        <span className="font-medium">
-                          {category.replace(/([A-Z])/g, ' $1').trim()}
-                        </span>
+                      <label className="space-y-2 cursor-pointer block">
+                        <div className="flex items-center space-x-3">
+                          <Checkbox
+                            checked={config.categories[key as keyof typeof config.categories]}
+                            onCheckedChange={(checked: boolean) => setConfig(prev => ({
+                              ...prev,
+                              categories: {
+                                ...prev.categories,
+                                [key]: checked
+                              }
+                            }))}
+                          />
+                          <span className="font-medium text-gray-900">{category.title}</span>
+                        </div>
+                        <p className="text-sm text-gray-600 ml-7">{category.description}</p>
+                        <p className="text-xs text-gray-500 ml-7">Table: {category.table}</p>
                       </label>
                     </div>
                   ))}
@@ -241,7 +264,7 @@ export default function NewJobPage() {
                 </Button>
                 <Button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || !config.dbConnectionId || !Object.values(config.categories).some(Boolean)}
                 >
                   {loading ? 'Creating...' : 'Create Job'}
                 </Button>

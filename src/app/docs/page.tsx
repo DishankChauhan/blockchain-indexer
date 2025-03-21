@@ -2,6 +2,104 @@
 
 import React from 'react';
 import { motion } from "framer-motion";
+import { Card } from '@/components/ui/card';
+
+const DATA_TYPES = [
+  {
+    name: 'NFT Bids',
+    description: 'Track currently available bids on NFTs across various marketplaces.',
+    schema: `
+CREATE TABLE nft_bids (
+    id SERIAL PRIMARY KEY,
+    nft_address TEXT NOT NULL,
+    bid_amount NUMERIC NOT NULL,
+    bidder_address TEXT NOT NULL,
+    marketplace TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    status TEXT NOT NULL
+);`,
+    example: {
+      nft_address: 'DYtKK1G9pV5JhwWkyP6HSHwqH8VTkxDPKcUYQoRqtc5Y',
+      bid_amount: '50.5',
+      bidder_address: '8ZJ3eSQUVy4px2zcotm4ZgXm5yQMxKwNJKwF4BQZGH3t',
+      marketplace: 'magic_eden',
+      timestamp: '2024-03-21T19:33:53Z',
+      expires_at: '2024-03-22T19:33:53Z',
+      status: 'active'
+    }
+  },
+  {
+    name: 'NFT Prices',
+    description: 'Monitor current prices of NFTs across different marketplaces.',
+    schema: `
+CREATE TABLE nft_prices (
+    id SERIAL PRIMARY KEY,
+    nft_address TEXT NOT NULL,
+    collection_address TEXT NOT NULL,
+    price NUMERIC NOT NULL,
+    marketplace TEXT NOT NULL,
+    seller_address TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    status TEXT NOT NULL
+);`,
+    example: {
+      nft_address: 'DYtKK1G9pV5JhwWkyP6HSHwqH8VTkxDPKcUYQoRqtc5Y',
+      collection_address: '4mKSoDDqApmF1DqXvVTSL6tu2zixrSSNjqMxUnwvVzy2',
+      price: '100.75',
+      marketplace: 'tensor',
+      seller_address: '8ZJ3eSQUVy4px2zcotm4ZgXm5yQMxKwNJKwF4BQZGH3t',
+      timestamp: '2024-03-21T19:33:53Z',
+      status: 'listed'
+    }
+  },
+  {
+    name: 'Borrowable Tokens',
+    description: 'Track currently available tokens to borrow from lending protocols.',
+    schema: `
+CREATE TABLE lending_rates (
+    id SERIAL PRIMARY KEY,
+    token_mint TEXT NOT NULL,
+    amount_available NUMERIC NOT NULL,
+    interest_rate NUMERIC NOT NULL,
+    platform TEXT NOT NULL,
+    ltv_ratio NUMERIC,
+    timestamp TIMESTAMP NOT NULL,
+    status TEXT NOT NULL
+);`,
+    example: {
+      token_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      amount_available: '1000000.0',
+      interest_rate: '0.05',
+      platform: 'solend',
+      ltv_ratio: '0.8',
+      timestamp: '2024-03-21T19:33:53Z',
+      status: 'active'
+    }
+  },
+  {
+    name: 'Token Prices',
+    description: 'Monitor token prices across various platforms and DEXs.',
+    schema: `
+CREATE TABLE token_prices (
+    id SERIAL PRIMARY KEY,
+    token_mint TEXT NOT NULL,
+    price_usd NUMERIC NOT NULL,
+    platform TEXT NOT NULL,
+    volume_24h NUMERIC,
+    liquidity NUMERIC,
+    timestamp TIMESTAMP NOT NULL
+);`,
+    example: {
+      token_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      price_usd: '1.00',
+      platform: 'jupiter',
+      volume_24h: '5000000.0',
+      liquidity: '10000000.0',
+      timestamp: '2024-03-21T19:33:53Z'
+    }
+  }
+];
 
 export default function DocsPage() {
   return (
@@ -109,6 +207,82 @@ indexer.on('block', (block) => {
                   </div>
                 ))}
               </div>
+            </div>
+          </section>
+
+          <section className="mt-16">
+            <h2 className="text-3xl font-bold text-white mb-6">Data Types Documentation</h2>
+            <div className="prose prose-lg max-w-none mb-8">
+              <p>
+                Our blockchain indexer supports various types of data that can be indexed from the Solana blockchain.
+                Each data type is stored in its own table in your PostgreSQL database and is updated in real-time
+                through Helius webhooks.
+              </p>
+            </div>
+
+            <div className="space-y-8">
+              {DATA_TYPES.map((type) => (
+                <Card key={type.name} className="p-6">
+                  <h3 className="text-2xl font-bold mb-4">{type.name}</h3>
+                  <p className="text-gray-600 mb-6">{type.description}</p>
+
+                  <div className="mb-6">
+                    <h4 className="text-lg font-semibold mb-2">Schema</h4>
+                    <pre className="bg-gray-100 p-4 rounded-lg overflow-x-auto">
+                      <code>{type.schema}</code>
+                    </pre>
+                  </div>
+
+                  <div>
+                    <h4 className="text-lg font-semibold mb-2">Example Data</h4>
+                    <pre className="bg-gray-100 p-4 rounded-lg overflow-x-auto">
+                      <code>{JSON.stringify(type.example, null, 2)}</code>
+                    </pre>
+                  </div>
+                </Card>
+              ))}
+            </div>
+
+            <div className="mt-12 prose prose-lg max-w-none">
+              <h3>Usage Instructions</h3>
+              <ol>
+                <li>
+                  <strong>Set Up Database Connection</strong>
+                  <p>
+                    First, add your PostgreSQL database credentials in the Connections page.
+                    Make sure your database is accessible and has the necessary permissions.
+                  </p>
+                </li>
+                <li>
+                  <strong>Create an Indexing Job</strong>
+                  <p>
+                    Go to the Jobs page and create a new indexing job. Select which data types
+                    you want to index and specify the slot range (use 0 for continuous indexing).
+                  </p>
+                </li>
+                <li>
+                  <strong>Monitor Progress</strong>
+                  <p>
+                    Use the Data Browser to verify that data is being written to your database.
+                    You can view recent records and monitor the indexing progress.
+                  </p>
+                </li>
+                <li>
+                  <strong>Access Your Data</strong>
+                  <p>
+                    Connect to your PostgreSQL database directly to query the indexed data
+                    using standard SQL queries. All tables follow the schemas shown above.
+                  </p>
+                </li>
+              </ol>
+
+              <h3>Best Practices</h3>
+              <ul>
+                <li>Start with a small slot range to test the indexing process</li>
+                <li>Monitor your database size and implement appropriate retention policies</li>
+                <li>Use indexes on frequently queried columns for better performance</li>
+                <li>Set up regular backups of your indexed data</li>
+              </ul>
             </div>
           </section>
         </motion.div>
